@@ -1,0 +1,31 @@
+@FasonBarkod.Api_HostAddress = http://localhost:5135
+
+GET {{FasonBarkod.Api_HostAddress}}/health
+Accept: application/json
+
+###
+
+GET {{FasonBarkod.Api_HostAddress}}/saphealth
+Accept: application/json
+
+###
+
+GET {{FasonBarkod.Api_HostAddress}}/api/sas/50001234/lines
+X-Api-Key: dev-api-key-change-in-production
+Accept: application/json
+
+###
+
+POST {{FasonBarkod.Api_HostAddress}}/api/sas/barcodes
+X-Api-Key: dev-api-key-change-in-production
+Content-Type: application/json
+
+{
+  "purchaseOrderNo": "50001234",
+  "lineNo": "1",
+  "materialNumber": "YTK-001",
+  "packageQuantity": 10,
+  "printQuantity": 10,
+  "labelType": 1,
+  "printedBy": "operator@fason.local"
+}

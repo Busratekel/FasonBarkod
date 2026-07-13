@@ -1,0 +1,19 @@
+@model LabelTemplateEditViewModel
+@{
+    ViewData["Title"] = "Etiket Tasarımını Düzenle";
+}
+
+<h1 class="h3 mb-3">Etiket Tasarımını Düzenle</h1>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <partial name="_Form" model="Model" />
+    </div>
+    <div class="col-lg-4">
+        <partial name="_PlaceholderHelp" />
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

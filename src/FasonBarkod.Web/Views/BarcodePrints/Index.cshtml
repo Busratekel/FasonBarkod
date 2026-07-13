@@ -1,0 +1,71 @@
+@model IEnumerable<BarcodePrintListItemViewModel>
+@using FasonBarkod.Core.Enums
+@{
+    ViewData["Title"] = "Basım Geçmişi";
+
+    string StatusLabel(BarcodePrintStatus status) => status switch
+    {
+        BarcodePrintStatus.Pending => "Bekliyor",
+        BarcodePrintStatus.Printed => "Basıldı",
+        BarcodePrintStatus.SentToSap => "SAP'ye gönderildi",
+        BarcodePrintStatus.Failed => "Hata",
+        BarcodePrintStatus.Cancelled => "İptal",
+        _ => status.ToString()
+    };
+
+    string StatusClass(BarcodePrintStatus status) => status switch
+    {
+        BarcodePrintStatus.SentToSap => "success",
+        BarcodePrintStatus.Failed => "danger",
+        BarcodePrintStatus.Cancelled => "secondary",
+        BarcodePrintStatus.Printed => "primary",
+        _ => "warning"
+    };
+}
+
+<h1 class="h3 mb-2">Basım Geçmişi</h1>
+<p class="text-muted small mb-3">
+    Bu liste SAP'ten canlı çekilmez. Bu uygulamada <strong>ZMM_N_SAS_B başarılı</strong> olan basımlar kaydedilir.
+    SAP'teki basılan koli sayısı için SAS detay tablosundaki <strong>Basılan Koli</strong> sütununa bakın.
+</p>
+
+<div class="table-responsive">
+    <table class="table table-striped align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>Barkod No</th>
+                <th>Sipariş</th>
+                <th>Malzeme</th>
+                <th class="text-end">Adet</th>
+                <th>Tarih</th>
+                <th>Basan</th>
+                <th>Durum</th>
+                <th>SAP</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var item in Model)
+        {
+            <tr>
+                <td class="fw-semibold">@item.BarcodeNo</td>
+                <td>@item.SalesOrderNo</td>
+                <td>@item.MaterialCode @(!string.IsNullOrWhiteSpace(item.MaterialName) ? $"({item.MaterialName})" : "")</td>
+                <td class="text-end">@item.Quantity.ToString("N0")</td>
+                <td>@item.PrintDate.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
+                <td>@item.PrintedBy</td>
+                <td><span class="badge text-bg-@StatusClass(item.Status)">@StatusLabel(item.Status)</span></td>
+                <td>@(item.SapSent ? "Evet" : "Hayır")</td>
+                <td class="text-end">
+                    <a class="btn btn-sm btn-outline-primary" asp-action="Detail" asp-route-id="@item.Id">Detay</a>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+@if (!Model.Any())
+{
+    <p class="text-muted">Henüz basım kaydı yok.</p>
+}

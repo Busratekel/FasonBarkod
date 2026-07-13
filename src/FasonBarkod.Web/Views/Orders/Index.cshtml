@@ -1,0 +1,39 @@
+@model IEnumerable<OrderSummaryViewModel>
+@{
+    ViewData["Title"] = "Sipariş Listesi";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Sipariş Listesi</h1>
+    <span class="badge text-bg-secondary">Örnek veri</span>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-striped table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>Sipariş No</th>
+                <th>Müşteri</th>
+                <th>Tarih</th>
+                <th class="text-end">Kalem</th>
+                <th class="text-end">Toplam Miktar</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var order in Model)
+        {
+            <tr>
+                <td class="fw-semibold">@order.SalesOrderNo</td>
+                <td>@order.CustomerName</td>
+                <td>@(order.OrderDate?.ToString("dd.MM.yyyy") ?? "-")</td>
+                <td class="text-end">@order.LineCount</td>
+                <td class="text-end">@order.TotalQuantity.ToString("N0")</td>
+                <td class="text-end">
+                    <a class="btn btn-sm btn-primary" asp-action="Detail" asp-route-id="@order.SalesOrderNo">Detay</a>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>

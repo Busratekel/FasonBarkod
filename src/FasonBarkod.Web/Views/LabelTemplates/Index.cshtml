@@ -1,0 +1,78 @@
+@model List<LabelTemplateListItemViewModel>
+@{
+    ViewData["Title"] = "Etiket Tasarımları";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="h3 mb-1">Etiket Tasarımları</h1>
+        <p class="text-muted mb-0">
+            Her marka ve etiket tipi için tasarımı buradan oluşturup düzenleyebilirsiniz.
+            Dosya yüklemenize gerek yok.
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" asp-controller="PrintSettings" asp-action="Index">Yazıcı Ayarları</a>
+        <a class="btn btn-primary" asp-action="Create">Yeni Tasarım</a>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <strong>Nasıl çalışır?</strong>
+    Basım sırasında SAP'ten gelen <em>malzeme grubu kodu</em> ile eşleşen tasarım otomatik seçilir.
+    Markaya özel tasarım yoksa <strong>varsayılan</strong> (marka alanı boş) tasarım kullanılır.
+</div>
+
+@if (Model.Count == 0)
+{
+    <div class="alert alert-warning">
+        Henüz tasarım yok.
+        <a asp-action="Create">İlk tasarımı oluşturun</a> — en az bir koli üstü ve bir koli içi varsayılan tasarım ekleyin.
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-bordered table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Tasarım Adı</th>
+                    <th>Etiket Tipi</th>
+                    <th>Marka / Grup</th>
+                    <th>Durum</th>
+                    <th>Güncelleme</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in Model)
+            {
+                <tr class="@(string.IsNullOrWhiteSpace(item.BrandCode) ? "table-secondary" : null)">
+                    <td>@item.Name</td>
+                    <td>@item.LabelTypeDisplay</td>
+                    <td>@(string.IsNullOrWhiteSpace(item.BrandCode) ? "Varsayılan (tüm markalar)" : item.BrandCode)</td>
+                    <td>
+                        @if (item.IsActive)
+                        {
+                            <span class="badge text-bg-success">Aktif</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-secondary">Pasif</span>
+                        }
+                    </td>
+                    <td class="text-muted small">@item.UpdatedAt.ToLocalTime().ToString("g")</td>
+                    <td class="text-end text-nowrap">
+                        <a class="btn btn-sm btn-outline-primary" asp-action="Edit" asp-route-id="@item.Id">Düzenle</a>
+                        <form asp-action="Delete" asp-route-id="@item.Id" method="post" class="d-inline"
+                              onsubmit="return confirm('Bu tasarım silinsin mi?');">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Sil</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}

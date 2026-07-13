@@ -1,0 +1,406 @@
+@model SasDetailViewModel
+@{
+    ViewData["Title"] = $"SAS {Model.PurchaseOrderNo}";
+    var selected = Model.SelectedLine;
+    var isPrintTab = Model.ActiveTab != "reprint";
+    var koliUstuCount = selected is not null && Model.PackageQuantity > 0
+        ? (int)(Model.KoliUstuQuantity / Model.PackageQuantity)
+        : 0;
+    var koliIciCount = selected is not null && Model.KoliIciQuantity > 0
+        ? (int)Model.KoliIciQuantity
+        : 0;
+}
+
+<nav aria-label="breadcrumb" class="mb-3">    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a asp-action="Index">SAS</a></li>
+        <li class="breadcrumb-item active">@Model.PurchaseOrderNo</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="h3 mb-0">SAS @Model.PurchaseOrderNo</h1>
+        @if (!string.IsNullOrWhiteSpace(Model.CustomerName) || !string.IsNullOrWhiteSpace(Model.VendorCode))
+        {
+            <p class="text-muted mb-0 small">
+                Cari:
+                <strong>@(Model.CustomerName ?? Model.VendorCode)</strong>
+                @if (!string.IsNullOrWhiteSpace(Model.CustomerName) && !string.IsNullOrWhiteSpace(Model.VendorCode))
+                {
+                    <span class="text-muted">(@Model.VendorCode)</span>
+                }
+            </p>
+        }
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" asp-action="Index">Yeni arama</a>
+</div>
+
+<div class="table-responsive mb-3">
+    <table class="table table-bordered table-hover align-middle sas-lines-table">
+        <thead class="table-light">
+            <tr>
+                <th>Kalem No</th>
+                <th>Malzeme Kodu</th>
+                <th>Malzeme Açıklaması</th>
+                <th>Birim</th>
+                <th class="text-end">Miktar</th>
+                <th class="text-end">Paket Miktarı</th>
+                <th class="text-end">Basılan Koli</th>
+                <th>Cari</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var line in Model.Lines)
+        {
+            var isSelected = line.LineNo == Model.SelectedLineNo;
+            <tr class="@(isSelected ? "table-warning" : null)">
+                <td>@line.LineNo</td>
+                <td>@line.MaterialNumber</td>
+                <td>@line.MaterialDescription</td>
+                <td>@line.Unit</td>
+                <td class="text-end">@line.Quantity.ToString("N0")</td>
+                <td class="text-end">@line.PackageQuantity.ToString("N0")</td>
+                <td class="text-end">@line.PrintedBoxCount</td>
+                <td>
+                    @{
+                        var cariDisplay = !string.IsNullOrWhiteSpace(line.CustomerName)
+                            ? line.CustomerName
+                            : line.VendorCode;
+                    }
+                    @(string.IsNullOrWhiteSpace(cariDisplay) ? "—" : cariDisplay)
+                </td>
+                <td class="text-end">
+                    <a class="btn btn-sm @(isSelected ? "btn-warning" : "btn-outline-success")"
+                       asp-action="Detail"
+                       asp-route-id="@Model.PurchaseOrderNo"
+                       asp-route-vendorCode="@(Model.VendorCode ?? line.VendorCode)"
+                       asp-route-lineNo="@line.LineNo"
+                       asp-route-tab="@Model.ActiveTab">
+                        @(isSelected ? "Seçili" : "Seç")
+                    </a>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+<div class="row g-3 sas-print-panel align-items-start">
+    <div class="col-lg-5 d-flex flex-column gap-3">
+        <div class="card shadow-sm sas-order-info">            <div class="card-header fw-semibold">SİPARİŞ BİLGİLERİ</div>
+            <div class="card-body">
+                @if (selected is null)
+                {
+                    <p class="text-muted mb-0">Etiket basmak için tablodan bir kalem seçin.</p>
+                }
+                else
+                {
+                    <dl class="row mb-0">
+                        <dt class="col-sm-5">SAS No</dt>
+                        <dd class="col-sm-7">@Model.PurchaseOrderNo</dd>
+                        <dt class="col-sm-5">Cari / Satıcı</dt>
+                        <dd class="col-sm-7">
+                            @{
+                                var vendorDisplay = !string.IsNullOrWhiteSpace(Model.CustomerName)
+                                    ? Model.CustomerName
+                                    : !string.IsNullOrWhiteSpace(Model.VendorCode)
+                                        ? Model.VendorCode
+                                        : !string.IsNullOrWhiteSpace(selected.CustomerName)
+                                            ? selected.CustomerName
+                                            : selected.VendorCode;
+                                var vendorCodeDisplay = !string.IsNullOrWhiteSpace(Model.VendorCode)
+                                    ? Model.VendorCode
+                                    : selected.VendorCode;
+                            }
+                            @(string.IsNullOrWhiteSpace(vendorDisplay) ? "—" : vendorDisplay)
+                            @if (!string.IsNullOrWhiteSpace(vendorDisplay) && !string.IsNullOrWhiteSpace(vendorCodeDisplay)
+                                 && !string.Equals(vendorDisplay, vendorCodeDisplay, StringComparison.OrdinalIgnoreCase))
+                            {
+                                <span class="text-muted small"> (@vendorCodeDisplay)</span>
+                            }
+                        </dd>
+                        <dt class="col-sm-5">Kalem</dt>
+                        <dd class="col-sm-7">@selected.LineNo</dd>
+                        <dt class="col-sm-5">Malzeme</dt>
+                        <dd class="col-sm-7">@selected.MaterialNumber</dd>
+                        <dt class="col-sm-5">Açıklama</dt>
+                        <dd class="col-sm-7">@selected.MaterialDescription</dd>
+                        <dt class="col-sm-5">Miktar</dt>
+                        <dd class="col-sm-7">@selected.Quantity.ToString("N0") @selected.Unit</dd>
+                        <dt class="col-sm-5">Basılan Koli</dt>
+                        <dd class="col-sm-7">@selected.PrintedBoxCount</dd>
+                    </dl>
+                }
+            </div>
+        </div>
+
+        <!--@if (selected is not null)
+        {
+            <div class="alert alert-info small mb-0">
+                <strong>Etiket kuralları</strong>
+                <ul class="mb-0 ps-3">
+                    <li><strong>Paket miktarı:</strong> SAP'ten otomatik gelir; normalde değiştirmeyin. İstisna durumda "Düzenle" ile açılır.</li>
+                    <li><strong>Koli üstü:</strong> Girilen miktar paket miktarının tam katı olmalıdır. Örn. paket 10, miktar 10 → <strong>1</strong> koli üstü etiketi (KOLİ 10 ADET).</li>
+                    <li><strong>Koli içi:</strong> Girilen miktar kadar bağımsız etiket basılır. Örn. paket 10, miktar 10 → <strong>10</strong> koli içi etiketi.</li>
+                    <li><strong>Örnek (sipariş 25, paket 10):</strong> Koli üstü için <strong>20</strong> girin → 2 tam koli etiketi. Kalan 5 adet için <strong>koli içi</strong> alanına <strong>25</strong> (veya sadece 5) girerek ürün etiketlerini basın.</li>
+                    <li><strong>Butonlar:</strong> SAP'ten barkod alır, .prn şablonu doldurur ve SATO yazıcıya gönderir.</li>
+                </ul>
+            </div>
+        }
+        -->
+    </div>
+
+    <div class="col-lg-7">
+        <div class="card shadow-sm">            <div class="card-header p-0">
+                <ul class="nav nav-tabs card-header-tabs sas-print-tabs" role="tablist">
+                    <li class="nav-item">
+                        <button class="nav-link @(isPrintTab ? "active" : "")" data-bs-toggle="tab" data-bs-target="#etiket-yazdir" type="button"
+                                @(selected is null ? "disabled" : null)>ETİKET YAZDIR</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(!isPrintTab ? "active" : "")" data-bs-toggle="tab" data-bs-target="#yeniden-etiket-yazdir" type="button"
+                                @(selected is null ? "disabled" : null)>YENİDEN ETİKET YAZDIR</button>
+                    </li>
+                </ul>
+            </div>
+            <div class="card-body tab-content">
+                <div class="tab-pane fade @(isPrintTab ? "show active" : "")" id="etiket-yazdir">
+                    @if (selected is null)
+                    {
+                        <p class="text-muted mb-0">Kalem seçilmedi.</p>
+                    }
+                    else
+                    {
+                        <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
+
+                        <input type="hidden" id="sapPackageQuantity" value="@Model.PackageQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+
+                        <div class="row g-3 align-items-end mb-3">
+                            <div class="col-md-5">
+                                <label asp-for="PackageQuantity" class="form-label"></label>
+                                <div class="input-group">
+                                    <input asp-for="PackageQuantity" class="form-control sas-package-qty" id="packageQtyDisplay" readonly
+                                           data-val="false" step="any" />
+                                </div>
+                                <div class="form-text">SAP'ten otomatik gelir (PAKET_MIKTARI). Normalde değiştirmeyin.</div>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-4">
+                                <form asp-action="PrintKoliUstu" method="post" class="sas-print-form" novalidate>
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" asp-for="PurchaseOrderNo" />
+                                    <input type="hidden" asp-for="VendorCode" />
+                                    <input type="hidden" asp-for="SelectedLineNo" />
+                                    <input type="hidden" asp-for="LineNo" />
+                                    <input type="hidden" asp-for="MaterialNumber" />
+                                    <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
+                                    <label asp-for="KoliUstuQuantity" class="form-label"></label>
+                                    <input asp-for="KoliUstuQuantity" class="form-control mb-2" data-val="false" step="any" min="0.0001" />
+                                    @if (koliUstuCount > 0)
+                                    {
+                                        <div class="form-text mb-2">→ @koliUstuCount adet koli üstü etiketi basılır</div>
+                                    }
+                                    else if (Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0)
+                                    {
+                                        <div class="form-text text-danger mb-2">Paket miktarının katı olmalıdır.</div>
+                                    }
+                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn">Koli Üstü Barkodu</button>
+                                </form>
+                            </div>
+                            <div class="col-md-4 d-flex flex-column justify-content-end">
+                                <label class="form-label invisible">Aksesuar</label>
+                                <button type="button" class="btn btn-secondary w-100" disabled title="Yakında">Aksesuar Barkodu</button>
+                            </div>
+                            <div class="col-md-4">
+                                <form asp-action="PrintKoliIci" method="post" class="sas-print-form" novalidate>
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" asp-for="PurchaseOrderNo" />
+                                    <input type="hidden" asp-for="VendorCode" />
+                                    <input type="hidden" asp-for="SelectedLineNo" />
+                                    <input type="hidden" asp-for="LineNo" />
+                                    <input type="hidden" asp-for="MaterialNumber" />
+                                    <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
+                                    <label asp-for="KoliIciQuantity" class="form-label"></label>
+                                    <input asp-for="KoliIciQuantity" class="form-control mb-2" data-val="false" step="any" min="0.0001" />
+                                    @if (koliIciCount > 0)
+                                    {
+                                        <div class="form-text mb-2">→ @koliIciCount adet koli içi etiketi basılır</div>
+                                    }
+                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn">Koli İçi Barkodu</button>
+                                </form>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="tab-pane fade @(!isPrintTab ? "show active" : "")" id="yeniden-etiket-yazdir">
+                    @if (selected is null)
+                    {
+                        <p class="text-muted mb-0">Kalem seçilmedi.</p>
+                    }
+                    else
+                    {
+                        <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
+
+                        <p class="text-muted small">
+                            Daha önce basılmış bir etiketi seri numarası (SERNR) ile tekrar yazdırın.
+                        </p>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label asp-for="SerialNumber" class="form-label"></label>
+                                <input asp-for="SerialNumber" id="serialNumberInput" class="form-control" data-val="false" placeholder="Örn. 0000000123456789" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Paket Miktar</label>
+                                <input class="form-control" readonly value="@Model.PackageQuantity" />
+                            </div>
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <form asp-action="ReprintKoliUstu" method="post" class="sas-reprint-form" novalidate>
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" asp-for="PurchaseOrderNo" />
+                                    <input type="hidden" asp-for="VendorCode" />
+                                    <input type="hidden" asp-for="SelectedLineNo" />
+                                    <input type="hidden" asp-for="LineNo" />
+                                    <input type="hidden" asp-for="MaterialNumber" />
+                                    <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
+                                    <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
+                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn">Koli Üstü Tekrar Bas</button>
+                                </form>
+                            </div>
+                            <div class="col-md-6">
+                                <form asp-action="ReprintKoliIci" method="post" class="sas-reprint-form" novalidate>
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" asp-for="PurchaseOrderNo" />
+                                    <input type="hidden" asp-for="VendorCode" />
+                                    <input type="hidden" asp-for="SelectedLineNo" />
+                                    <input type="hidden" asp-for="LineNo" />
+                                    <input type="hidden" asp-for="MaterialNumber" />
+                                    <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
+                                    <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
+                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn">Koli İçi Tekrar Bas</button>
+                                </form>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (Model.RecentPrints.Count > 0)
+{
+    <div class="card shadow-sm mt-4 page-content-bottom">        <div class="card-header d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Basılan Etiketler</span>
+            <a class="btn btn-sm btn-outline-primary" asp-controller="BarcodePrints" asp-action="Index">Tüm Basım Geçmişi</a>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Barkod No</th>
+                            <th>Malzeme</th>
+                            <th class="text-end">Adet</th>
+                            <th>Tarih</th>
+                            <th>Basan</th>
+                            <th>Durum</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var print in Model.RecentPrints)
+                    {
+                        var statusLabel = print.Status switch
+                        {
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Printed => "Basıldı",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.SentToSap => "SAP",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Failed => "Hata",
+                            _ => print.Status.ToString()
+                        };
+                        <tr>
+                            <td class="fw-semibold">@print.BarcodeNo</td>
+                            <td>@print.MaterialCode</td>
+                            <td class="text-end">@print.Quantity.ToString("N0")</td>
+                            <td>@print.PrintDate.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
+                            <td>@(print.PrintedBy ?? "-")</td>
+                            <td><span class="badge text-bg-success">@statusLabel</span></td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-secondary" asp-controller="BarcodePrints" asp-action="Detail" asp-route-id="@print.Id">Detay</a>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+else if (selected is not null)
+{
+    <p class="text-muted mt-4 mb-0 page-content-bottom">
+        Bu kalem için uygulama kaydı yok. SAP'ten başarılı barkod alındığında burada görünür.
+        SAP tarafındaki basım bilgisi tabloda <strong>Basılan Koli</strong> sütunundadır.
+    </p>
+}
+
+@section Scripts {
+    <script>
+        (function () {
+            const packageInput = document.getElementById('packageQtyDisplay');
+            const serialInput = document.getElementById('serialNumberInput');
+            const toggleBtn = document.getElementById('togglePackageQty');
+            const hiddenFields = () => document.querySelectorAll('.sas-package-qty-hidden');
+            const serialFields = () => document.querySelectorAll('.sas-sernr-hidden');
+
+            function syncPackageQty() {
+                if (!packageInput) return;
+                hiddenFields().forEach(f => f.value = packageInput.value);
+            }
+
+            function syncSerialNumber() {
+                if (!serialInput) return;
+                serialFields().forEach(f => f.value = serialInput.value);
+            }
+
+            if (toggleBtn && packageInput) {
+                toggleBtn.addEventListener('click', function () {
+                    const editing = packageInput.readOnly;
+                    packageInput.readOnly = !editing;
+                    toggleBtn.textContent = editing ? 'Kilitle' : 'Düzenle';
+                    toggleBtn.classList.toggle('btn-outline-secondary', !editing);
+                    toggleBtn.classList.toggle('btn-warning', editing);
+                    if (editing) packageInput.focus();
+                });
+                packageInput.addEventListener('input', syncPackageQty);
+                syncPackageQty();
+            }
+
+            document.querySelectorAll('.sas-print-form, .sas-reprint-form').forEach(function (form) {
+                form.addEventListener('submit', function () {
+                    syncPackageQty();
+                    syncSerialNumber();
+                    const btn = form.querySelector('.sas-submit-btn') || form.querySelector('button[type="submit"]');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.textContent = 'SAP\'e gönderiliyor...';
+                    }
+                });
+            });
+
+            const feedback = document.getElementById('print-feedback');
+            if (feedback) feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        })();
+    </script>
+}

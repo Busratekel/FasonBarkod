@@ -1,0 +1,80 @@
+@model PrintSettingsViewModel
+@{
+    ViewData["Title"] = "Yazıcı Ayarları";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="h3 mb-1">Yazıcı Ayarları</h1>
+        <p class="text-muted mb-0">
+            Operatör bilgisayarında kullanılacak yazıcıyı buradan belirleyin.
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" asp-controller="LabelTemplates" asp-action="Index">Etiket Tasarımları</a>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <strong>Nasıl çalışır?</strong>
+    Varsayılan yazıcı seçiliyse Windows'un belirlediği yazıcı kullanılır.
+    Listeden belirli bir yazıcı seçerseniz her basımda o yazıcıya gönderilir.
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-header fw-semibold">Yazıcı Seçimi</div>
+    <div class="card-body">
+        <form asp-action="Index" method="post" class="row g-3">
+            @Html.AntiForgeryToken()
+
+            <div class="col-12">
+                <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" name="UseWindowsDefaultPrinter" value="true"
+                           id="useDefaultPrinter" @(Model.UseWindowsDefaultPrinter ? "checked" : null) />
+                    <label class="form-check-label" for="useDefaultPrinter">
+                        Windows varsayılan yazıcısı
+                        @if (!string.IsNullOrWhiteSpace(Model.DefaultPrinterName))
+                        {
+                            <span class="text-muted">(@Model.DefaultPrinterName)</span>
+                        }
+                    </label>
+                </div>
+            </div>
+
+            <div class="col-md-8">
+                <div class="row g-2 align-items-center">
+                    <div class="col">
+                        <select name="SelectedPrinterName" class="form-select" id="printerSelect">
+                            <option value="">— Yazıcı seçin —</option>
+                            @foreach (var printer in Model.InstalledPrinters)
+                            {
+                                <option value="@printer" selected="@(printer == Model.SelectedPrinterName ? "selected" : null)">@printer</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                    </div>
+                </div>
+                <div class="form-text">Bu bilgisayara tanımlı yazıcılar listelenir.</div>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            const useDefaultPrinter = document.getElementById('useDefaultPrinter');
+            const printerSelect = document.getElementById('printerSelect');
+            function syncPrinterSelectState() {
+                if (!printerSelect || !useDefaultPrinter) return;
+                printerSelect.disabled = useDefaultPrinter.checked;
+            }
+            if (useDefaultPrinter) {
+                useDefaultPrinter.addEventListener('change', syncPrinterSelectState);
+                syncPrinterSelectState();
+            }
+        })();
+    </script>
+}

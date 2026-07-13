@@ -1,0 +1,10 @@
+
+**** Log file opened at 2026-07-09 16:24:12.375442 UTC+03:00 (Türkiye Standart Saati), Encoding UTF-8
+NW RFC Library: Kernel variant, Release 750 Patch Level 9, Compiled on Jan 19 2022 05:10:42
+ CPIC library: 753.2021.05.10 version 3, NI library: 40, Kernel Release: 753 Patch Level 919
+ Current working directory: C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api, Program: FasonBarkod
+ Hardware: PC with Windows NT 12x AMD64 Level 6 (Mod 186 Step 3), Operating_system: Windows NT 10.0
+ Hostname: BY6-KAY-BT-11, IP address: 10.100.110.46, IPv6 address: fe80::bcac:57df:f86d:a535
+
+2026-07-09 16:24:12.375783 [117652] >> Info entry
+	Did not find config file C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api\sapnwrfc.ini.

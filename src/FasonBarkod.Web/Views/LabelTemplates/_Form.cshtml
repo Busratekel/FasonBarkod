@@ -1,0 +1,53 @@
+@model LabelTemplateEditViewModel
+@using FasonBarkod.Core.Enums
+
+<form asp-action="@(Model.Id == 0 ? "Create" : "Edit")" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" asp-for="Id" />
+
+    <div asp-validation-summary="ModelOnly" class="text-danger mb-3"></div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label asp-for="Name" class="form-label"></label>
+                    <input asp-for="Name" class="form-control" placeholder="Örn: Bellona Koli Üstü" />
+                    <span asp-validation-for="Name" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-3">
+                    <label asp-for="LabelType" class="form-label"></label>
+                    <select asp-for="LabelType" class="form-select" asp-items="Html.GetEnumSelectList<LabelType>()"></select>
+                </div>
+
+                <div class="col-md-3">
+                    <label asp-for="BrandCode" class="form-label"></label>
+                    <input asp-for="BrandCode" class="form-control" placeholder="Boş = varsayılan" />
+                    <div class="form-text">SAP malzeme grubu kodu. Boş bırakırsanız tüm markalar için varsayılan olur.</div>
+                </div>
+
+                <div class="col-12">
+                    <label asp-for="Content" class="form-label"></label>
+                    <textarea asp-for="Content" class="form-control font-monospace" rows="18" spellcheck="false"></textarea>
+                    <span asp-validation-for="Content" class="text-danger"></span>
+                    <div class="form-text">
+                        SATO yazıcı komutları. Metin içine <code>@@MAKTX</code>, <code>@@BARKOD1</code> gibi alanlar yazın;
+                        basımda SAP verisiyle otomatik doldurulur.
+                    </div>
+                </div>
+
+                <div class="col-12">
+                    <div class="form-check">
+                        <input asp-for="IsActive" class="form-check-input" />
+                        <label asp-for="IsActive" class="form-check-label"></label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card-footer d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Kaydet</button>
+            <a class="btn btn-outline-secondary" asp-action="Index">İptal</a>
+        </div>
+    </div>
+</form>

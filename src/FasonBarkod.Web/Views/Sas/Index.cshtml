@@ -1,0 +1,31 @@
+@model SasSearchViewModel
+@{
+    ViewData["Title"] = "SAS Barkodu Alma";
+}
+
+<h1 class="h3 mb-4">SAS Barkodu Alma</h1>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form asp-action="Index" method="post" class="row g-3 align-items-end">
+            <div asp-validation-summary="ModelOnly" class="text-danger mb-2"></div>
+            <div class="col-md-4">
+                <label asp-for="PurchaseOrderNo" class="form-label">SAS Numarası</label>
+                <input asp-for="PurchaseOrderNo" class="form-control form-control-lg" autofocus />
+                <span asp-validation-for="PurchaseOrderNo" class="text-danger"></span>
+            </div>
+            <div class="col-md-5">
+                <label asp-for="VendorCode" class="form-label">Cari / Satıcı Kodu</label>
+                <input asp-for="VendorCode" class="form-control form-control-lg" />
+                <div class="form-text">SAP satıcı kodu (LIFNR). Test SAS için boş bırakın.</div>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-success btn-lg w-100">LİSTELE</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

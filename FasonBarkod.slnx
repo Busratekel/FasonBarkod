@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FasonBarkod.Api/FasonBarkod.Api.csproj" />
+    <Project Path="src/FasonBarkod.Core/FasonBarkod.Core.csproj" />
+    <Project Path="src/FasonBarkod.Infrastructure/FasonBarkod.Infrastructure.csproj" />
+    <Project Path="src/FasonBarkod.Web/FasonBarkod.Web.csproj" />
+  </Folder>
+</Solution>
