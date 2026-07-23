@@ -21,7 +21,7 @@ public class SapService(
 {
     private readonly SapOptions _sapOptions = sapOptions.Value;
 
-    public async Task<IReadOnlyList<SasLineDto>> ListSasAsync(
+    public async Task<SasListResult> ListSasAsync(
         string purchaseOrderNo,
         string? vendorCode = null,
         CancellationToken cancellationToken = default)
@@ -31,30 +31,39 @@ public class SapService(
             try
             {
                 var normalizedVendor = NormalizeVendorForSap(vendorCode);
-                var paddedOrder = SapAccountNumber.Pad10(purchaseOrderNo);
+                var paddedOrder = string.IsNullOrWhiteSpace(purchaseOrderNo)
+                    ? "(boş)"
+                    : SapAccountNumber.Pad10(purchaseOrderNo);
 
-                logger.LogInformation(
-                    "ZMM_N_SAS_L çağrılıyor: EBELN={OrderNo} KUNNR={Vendor}",
+                if (string.IsNullOrWhiteSpace(purchaseOrderNo) && !string.IsNullOrWhiteSpace(normalizedVendor))
+                {
+                    var (vendorRows, vendorMessages) = InvokeSasListForVendor(normalizedVendor);
+                    var vendorLines = MapSasLines(vendorRows, string.Empty, vendorCode);
+                    return new SasListResult(vendorLines, vendorMessages);
+                }
+
+                logger.LogDebug(
+                    "ZMM_N_SAS_L: EBELN={OrderNo} LIFNR={Vendor}",
                     paddedOrder,
                     normalizedVendor ?? "(boş)");
 
-                var exportRows = InvokeSasListVariants(purchaseOrderNo, normalizedVendor);
+                var (exportRows, sapMessages) = InvokeSasListVariants(purchaseOrderNo, normalizedVendor);
                 var lines = MapSasLines(exportRows, purchaseOrderNo, vendorCode);
 
                 if (lines.Count > 0)
                 {
-                    logger.LogInformation("ZMM_N_SAS_L başarılı: {OrderNo}, {Count} kalem", purchaseOrderNo, lines.Count);
-                    return lines;
+                    return new SasListResult(lines, sapMessages);
                 }
 
-                logger.LogWarning(
-                    "ZMM_N_SAS_L boş döndü: {OrderNo}, satıcı={Vendor}",
-                    purchaseOrderNo,
-                    string.IsNullOrWhiteSpace(vendorCode) ? "(boş)" : vendorCode.Trim());
+                logger.LogDebug(
+                    "ZMM_N_SAS_L boş: {OrderNo}, satıcı={Vendor}, SAP={SapMessage}",
+                    string.IsNullOrWhiteSpace(purchaseOrderNo) ? "(boş)" : purchaseOrderNo,
+                    string.IsNullOrWhiteSpace(vendorCode) ? "(boş)" : vendorCode.Trim(),
+                    sapMessages.Count > 0 ? string.Join(" | ", sapMessages) : "(yok)");
 
                 if (!_sapOptions.UseMockFallback)
                 {
-                    return [];
+                    return new SasListResult([], sapMessages);
                 }
             }
             catch (Exception ex)
@@ -69,16 +78,20 @@ public class SapService(
         }
         else if (!_sapOptions.UseMockFallback)
         {
-            return [];
+            return new SasListResult([], []);
         }
 
-        return await GetMockSasLinesAsync(purchaseOrderNo, cancellationToken);
+        var mockLines = await GetMockSasLinesAsync(purchaseOrderNo, cancellationToken);
+        return new SasListResult(mockLines, []);
     }
 
-    private ZmmSasLExportRow[] InvokeSasListVariants(string purchaseOrderNo, string? vendorCode)
+    private (ZmmSasLExportRow[] Rows, List<string> Messages) InvokeSasListVariants(
+        string purchaseOrderNo,
+        string? vendorCode)
     {
         using var connection = connectionFactory.OpenConnection();
 
+        var rfcNames = new[] { SapRfcFunctions.Sas.List, SapRfcFunctions.Sas.ListLegacy };
         var imports = new List<ZmmSasLImport>
         {
             ZmmSasLImportMapper.FromRequest(purchaseOrderNo, vendorCode)
@@ -89,42 +102,135 @@ public class SapService(
             imports.Add(ZmmSasLImportMapper.FromRequest(purchaseOrderNo, null));
         }
 
-        foreach (var import in imports)
+        var allMessages = new List<string>();
+
+        foreach (var rfcName in rfcNames)
         {
-            var rows = InvokeSasListOnce(connection, import);
-            if (rows.Length > 0)
+            foreach (var import in imports)
             {
-                return rows;
+                try
+                {
+                    var (rows, messages) = InvokeSasListOnce(connection, import, rfcName);
+
+                    foreach (var message in messages)
+                    {
+                        if (!allMessages.Contains(message, StringComparer.OrdinalIgnoreCase))
+                        {
+                            allMessages.Add(message);
+                        }
+                    }
+
+                    if (messages.Count > 0)
+                    {
+                        logger.LogDebug("{Rfc} IT_HATA: {Messages}", rfcName, string.Join(" | ", messages));
+                    }
+
+                    if (rows.Length > 0)
+                    {
+                        return (rows, allMessages);
+                    }
+                }
+                catch (Exception ex) when (IsMissingRfcMember(ex))
+                {
+                    logger.LogDebug("{Rfc} invoke atlandı: {Message}", rfcName, ex.Message);
+                }
             }
         }
 
-        return [];
+        return ([], allMessages);
     }
 
-    private ZmmSasLExportRow[] InvokeSasListOnce(
-        SapNwRfc.SapConnection connection,
-        ZmmSasLImport import)
+    /// <summary>
+    /// SAP boş EBELN + I_KUNNR tek başına çalışmıyor; açık SAS listesindeki siparişler
+    /// cari kodu ile tek tek (batch) sorgulanır — I_KUNNR filtre olarak kullanılır.
+    /// </summary>
+    private (ZmmSasLExportRow[] Rows, List<string> Messages) InvokeSasListForVendor(string vendorCode)
     {
-        using var function = connection.CreateFunction(SapRfcFunctions.Sas.List);
-        var result = function.Invoke<ZmmSasLResult>(import);
+        using var connection = connectionFactory.OpenConnection();
+        const string rfcName = SapRfcFunctions.Sas.List;
+        const int batchSize = 50;
 
-        var exportRows = result.Items;
-        if (exportRows.Length == 0)
+        var openImport = ZmmSasLImportMapper.FromRequest(string.Empty, null);
+        var (openRows, openMessages) = InvokeSasListOnce(connection, openImport, rfcName);
+
+        var allMessages = new List<string>(openMessages);
+        if (openRows.Length == 0)
         {
+            return ([], allMessages);
+        }
+
+        var orderNos = openRows
+            .Select(r => r.PurchaseOrderNo?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        logger.LogDebug(
+            "Cari filtresi: {OrderCount} açık SAS, I_KUNNR={Vendor}",
+            orderNos.Count,
+            vendorCode);
+
+        var matched = new List<ZmmSasLExportRow>();
+
+        for (var i = 0; i < orderNos.Count; i += batchSize)
+        {
+            var batch = orderNos.Skip(i).Take(batchSize).ToArray();
+            var import = ZmmSasLImportMapper.FromOrders(batch, vendorCode);
+
             try
             {
-                using var altFunction = connection.CreateFunction(SapRfcFunctions.Sas.List);
-                var alt = altFunction.Invoke<ZmmSasLResultEt>(import);
-                exportRows = alt.Items;
+                var (rows, messages) = InvokeSasListOnce(connection, import, rfcName);
+
+                foreach (var message in messages)
+                {
+                    if (!allMessages.Contains(message, StringComparer.OrdinalIgnoreCase))
+                    {
+                        allMessages.Add(message);
+                    }
+                }
+
+                if (rows.Length > 0)
+                {
+                    matched.AddRange(rows);
+                }
             }
-            catch (Exception ex) when (ex.Message.Contains("ET_DATA", StringComparison.OrdinalIgnoreCase))
+            catch (Exception ex) when (IsMissingRfcMember(ex))
             {
-                logger.LogDebug("ZMM_N_SAS_L ET_DATA yok, yalnızca IT_DATA kullanılıyor");
+                logger.LogDebug("{Rfc} batch invoke atlandı: {Message}", rfcName, ex.Message);
             }
         }
 
-        return exportRows;
+        return (matched.ToArray(), allMessages);
     }
+
+    private static (ZmmSasLExportRow[] Rows, List<string> Messages) InvokeSasListOnce(
+        SapNwRfc.SapConnection connection,
+        ZmmSasLImport import,
+        string rfcName)
+    {
+        using var function = connection.CreateFunction(rfcName);
+        var invoke = new ZmmSasLInvoke
+        {
+            PurchaseOrderNumbers = import.PurchaseOrderNumbers,
+            VendorCode = import.VendorCode
+        };
+
+        var result = function.Invoke<ZmmSasLInvoke>(invoke);
+        var messages = ExtractSapMessages(result.Errors);
+
+        return (result.Items, messages);
+    }
+
+    private static List<string> ExtractSapMessages(ZmmSasLErrorRow[] errors) =>
+        errors
+            .Select(e => e.Message.Trim())
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static bool IsMissingRfcMember(Exception ex) =>
+        ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("FUNCTION_NOT_FOUND", StringComparison.OrdinalIgnoreCase);
 
     private static List<SasLineDto> MapSasLines(
         IEnumerable<ZmmSasLExportRow> exportRows,
@@ -132,17 +238,21 @@ public class SapService(
         string? vendorCode) =>
         exportRows.Select(r => new SasLineDto(
             string.IsNullOrWhiteSpace(r.PurchaseOrderNo) ? purchaseOrderNo : r.PurchaseOrderNo.Trim(),
-            r.LineNo.Trim(),
+            FormatLineNo(r.LineNo),
             r.MaterialNumber.Trim(),
             r.MaterialDescription.Trim(),
             string.IsNullOrWhiteSpace(r.Unit) ? "AD" : r.Unit.Trim(),
             r.Quantity,
             r.PackageQuantity > 0 ? r.PackageQuantity : 1,
             r.PrintedBoxCount,
+            r.PrintedInsideBoxCount,
             r.MaterialGroupCode.Trim(),
             r.MaterialGroupDescription.Trim(),
             vendorCode?.Trim() ?? string.Empty,
             string.Empty)).ToList();
+
+    private static string FormatLineNo(int lineNo) =>
+        lineNo > 0 ? lineNo.ToString() : string.Empty;
 
     public Task<SapBarcodeResult> CreateBarcodeAsync(
         SapBarcodeRequest request,
@@ -157,7 +267,7 @@ public class SapService(
         {
             return Task.FromResult(new SapBarcodeResult(
                 false,
-                PackageQuantityValidator.NotMultipleError,
+                PackageQuantityValidator.GetValidationError(request.LabelType),
                 [],
                 null));
         }
@@ -173,36 +283,32 @@ public class SapService(
                 using var function = connection.CreateFunction(rfcName);
 
                 var import = ZmmSasBImportMapper.FromBarcodeRequest(request);
-                logger.LogInformation(
-                    "ZMM_N_SAS_B çağrılıyor: EBELN={OrderNo} EBELP={LineNo} KOLI_BAS={BoxTop} KOLI_ICI_BAS={BoxInside} PAKET={Package} KOLI={Koli} KOLI_ICI={KoliIci}",
+                logger.LogDebug(
+                    "ZMM_N_SAS_B: EBELN={OrderNo} EBELP={LineNo} BASILACAK={BarcodesToPrint}",
                     import.PurchaseOrderNo,
                     import.LineNo,
-                    import.BoxTopPrintQuantity,
-                    import.BoxInsidePrintQuantity,
-                    import.PackageInsideQuantity,
-                    import.PrintBoxTop,
-                    import.PrintBoxInside);
+                    import.BarcodesToPrint);
 
-                var result = function.Invoke<ZmmSasBResult>(import);
+                var result = function.Invoke<ZmmSasBInvoke>(import);
 
-                var mapped = MapBarcodeResult(result);
+                var mapped = MapBarcodeResult(result.Items, result.Errors);
                 if (mapped.Success)
                 {
+                    logger.LogDebug(
+                        "ZMM_N_SAS_B: {OrderNo}/{LineNo} IT_DATA={Count}",
+                        request.ReferenceNo,
+                        request.LineNo,
+                        result.Items.Length);
                     return Task.FromResult(mapped);
                 }
 
-                sapError = ZmmSasBResultHelper.ResolvedErrorMessage(result);
-                if (string.IsNullOrWhiteSpace(sapError))
-                {
-                    sapError = mapped.ErrorMessage;
-                }
+                sapError = mapped.ErrorMessage;
 
-                logger.LogWarning(
-                    "ZMM_N_SAS_B boş döndü: {OrderNo} kalem {LineNo}, satır={Count}, SAP={SapError}",
+                logger.LogDebug(
+                    "ZMM_N_SAS_B boş: {OrderNo}/{LineNo}, SAP={SapError}",
                     request.ReferenceNo,
                     request.LineNo,
-                    ZmmSasBResultHelper.AllItems(result).Count(),
-                    string.IsNullOrWhiteSpace(sapError) ? "(mesaj yok)" : sapError);
+                    string.IsNullOrWhiteSpace(sapError) ? "(yok)" : sapError);
 
                 if (!_sapOptions.UseMockFallback)
                 {
@@ -238,7 +344,12 @@ public class SapService(
             request.PackageQuantity,
             request.LabelType);
 
-        var mockStamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        // Saniye hassasiyetli zaman damgası tek başına yeterli değil: aynı saniye içinde
+        // (örn. çift tıklama/yeniden gönderim) yapılan iki ayrı "yeni basım" isteği aynı MOCK
+        // barkodu üretip BarcodePrints tablosunda gerçek çakışmaya yol açabiliyordu. Her çağrıya
+        // özgü rastgele bir ek (Guid) ekleyerek bu çakışmayı pratikte imkansız hale getiriyoruz.
+        var mockStamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var mockNonce = Guid.NewGuid().ToString("N")[..6];
         var orderKey = request.ReferenceNo.Trim();
 
         var fallbackMessage = connectionFactory.IsConfigured
@@ -249,7 +360,7 @@ public class SapService(
             false,
             fallbackMessage,
             Enumerable.Range(1, labelCount)
-                .Select(i => $"MOCK-{orderKey}-{mockStamp}-{i:D4}")
+                .Select(i => $"MOCK-{orderKey}-{mockStamp}-{mockNonce}-{i:D4}")
                 .ToList(),
             null));
     }
@@ -277,16 +388,19 @@ public class SapService(
                 using var connection = connectionFactory.OpenConnection();
                 using var function = connection.CreateFunction(rfcName);
 
-                var result = function.Invoke<ZmmSasBResult>(
+                var result = function.Invoke<ZmmSasBtInvoke>(
                     ZmmSasBImportMapper.FromReprintRequest(request));
 
-                var mapped = MapBarcodeResult(result);
+                var mapped = MapBarcodeResult(result.Items, result.Errors);
                 if (mapped.Success)
                 {
                     return Task.FromResult(mapped);
                 }
 
-                logger.LogWarning("ZMM_N_SAS_B_T boş döndü: SERNR={Serial}", request.SerialNumber);
+                logger.LogDebug(
+                    "ZMM_N_SAS_B_T boş: SERNR={Serial}, SAP={SapError}",
+                    request.SerialNumber,
+                    string.IsNullOrWhiteSpace(mapped.ErrorMessage) ? "(yok)" : mapped.ErrorMessage);
 
                 if (!_sapOptions.UseMockFallback)
                 {
@@ -329,7 +443,7 @@ public class SapService(
         string purchaseOrderNo,
         CancellationToken cancellationToken)
     {
-        logger.LogInformation("SAS mock veri kullanılıyor: {OrderNo}", purchaseOrderNo);
+        logger.LogDebug("SAS mock veri: {OrderNo}", purchaseOrderNo);
 
         return await context.SalesOrderLines
             .Where(x => x.SalesOrderNo == purchaseOrderNo)
@@ -342,6 +456,7 @@ public class SapService(
                 x.Quantity,
                 10,
                 0,
+                0,
                 string.Empty,
                 string.Empty,
                 x.CustomerCode ?? string.Empty,
@@ -349,10 +464,11 @@ public class SapService(
             .ToListAsync(cancellationToken);
     }
 
-    private static SapBarcodeResult MapBarcodeResult(ZmmSasBResult result)
+    private static SapBarcodeResult MapBarcodeResult(ZmmSasBExportRow[] items, ZmmSasLErrorRow[] errors)
     {
-        var sapError = ZmmSasBResultHelper.ResolvedErrorMessage(result);
-        var labels = ZmmSasBResultHelper.AllItems(result).Select(r => new SasBarcodeLabelDto(
+        var messages = ZmmSasBResultHelper.ExtractMessages(errors);
+        var sapError = messages.Count > 0 ? string.Join(" | ", messages) : string.Empty;
+        var labels = items.Select(r => new SasBarcodeLabelDto(
             r.Barcode1.Trim(),
             r.Barcode2.Trim(),
             r.Barcode3.Trim(),
@@ -382,13 +498,39 @@ public class SapService(
 
         foreach (var label in labels)
         {
-            AddIfPresent(list, label.Barcode1);
-            AddIfPresent(list, label.Barcode2);
-            AddIfPresent(list, label.Barcode3);
-            AddIfPresent(list, label.Barcode4);
+            // Her etiket satırı için tek birincil barkod: BARKOD1 boş/malzeme kodu ise
+            // sonraki alanlara bak (koli içi yanıtında BARKOD1 bazen MATNR geliyor).
+            var primary = ResolvePrimaryBarcode(label);
+            AddIfPresent(list, primary);
         }
 
         return list.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// Etiket satırındaki gerçek barkodu seçer. SAP bazen BARKOD1 alanına malzeme kodunu
+    /// (MATNR) yazar; bu durumda BARKOD2/3/4'e düşülür.
+    /// </summary>
+    internal static string ResolvePrimaryBarcode(SasBarcodeLabelDto label)
+    {
+        foreach (var candidate in new[] { label.Barcode1, label.Barcode2, label.Barcode3, label.Barcode4 })
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            var trimmed = candidate.Trim();
+            if (!string.IsNullOrWhiteSpace(label.MaterialNumber)
+                && trimmed.Equals(label.MaterialNumber.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return trimmed;
+        }
+
+        return string.Empty;
     }
 
     private static void AddIfPresent(List<string> list, string? value)

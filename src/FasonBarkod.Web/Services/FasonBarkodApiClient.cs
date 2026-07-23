@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using FasonBarkod.Core.Enums;
 using FasonBarkod.Core.Sap;
@@ -8,9 +9,16 @@ using Microsoft.Extensions.Options;
 
 namespace FasonBarkod.Web.Services;
 
+public record SasListResponse(
+    IReadOnlyList<SasLineDto> Lines,
+    string? Error = null,
+    string? Hint = null,
+    string? Diagnostic = null,
+    string? SapMessage = null);
+
 public interface IFasonBarkodApiClient
 {
-    Task<IReadOnlyList<SasLineDto>> ListSasAsync(
+    Task<SasListResponse> ListSasAsync(
         string purchaseOrderNo,
         string? vendorCode = null,
         CancellationToken cancellationToken = default);
@@ -52,43 +60,115 @@ public class FasonBarkodApiClient(
         PropertyNameCaseInsensitive = true
     };
 
-    public async Task<IReadOnlyList<SasLineDto>> ListSasAsync(
+    public async Task<SasListResponse> ListSasAsync(
         string purchaseOrderNo,
         string? vendorCode = null,
         CancellationToken cancellationToken = default)
     {
-        var url = $"api/sas/{Uri.EscapeDataString(purchaseOrderNo)}/lines";
-        if (!string.IsNullOrWhiteSpace(vendorCode))
+        string url;
+        if (string.IsNullOrWhiteSpace(purchaseOrderNo))
         {
-            url += $"?vendorCode={Uri.EscapeDataString(vendorCode)}";
+            url = "api/sas/lines";
+            if (!string.IsNullOrWhiteSpace(vendorCode))
+            {
+                url += $"?vendorCode={Uri.EscapeDataString(vendorCode)}";
+            }
+        }
+        else
+        {
+            url = $"api/sas/{Uri.EscapeDataString(purchaseOrderNo)}/lines";
+            if (!string.IsNullOrWhiteSpace(vendorCode))
+            {
+                url += $"?vendorCode={Uri.EscapeDataString(vendorCode)}";
+            }
         }
 
-        var response = await httpClient.GetAsync(url, cancellationToken);
+        logger.LogDebug("SAS listesi: {Url}", url);
 
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        try
         {
-            return [];
-        }
+            var response = await httpClient.GetAsync(url, cancellationToken);
 
-        response.EnsureSuccessStatusCode();
-        var lines = await response.Content.ReadFromJsonAsync<List<SasLineDto>>(JsonOptions, cancellationToken);
-        return lines ?? [];
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var notFound = TryDeserializeNotFound(body);
+                logger.LogWarning(
+                    "SAS bulunamadı: {OrderNo}, cari={Vendor}, API={Error}",
+                    string.IsNullOrWhiteSpace(purchaseOrderNo) ? "(boş)" : purchaseOrderNo,
+                    vendorCode ?? "(boş)",
+                    notFound?.Error ?? body);
+
+                return new SasListResponse([], notFound?.Error, notFound?.Hint, notFound?.Diagnostic, notFound?.SapMessage);
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogError(
+                    "SAS API hata: {Status} {OrderNo} body={Body}",
+                    (int)response.StatusCode,
+                    string.IsNullOrWhiteSpace(purchaseOrderNo) ? "(boş)" : purchaseOrderNo,
+                    body.Length > 300 ? body[..300] : body);
+                return new SasListResponse(
+                    [],
+                    $"API yanıt vermedi ({(int)response.StatusCode}). API uygulamasını kontrol edin.");
+            }
+
+            var lines = await response.Content.ReadFromJsonAsync<List<SasLineDto>>(JsonOptions, cancellationToken);
+            return new SasListResponse(lines ?? []);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or SocketException)
+        {
+            logger.LogError(ex, "SAS API çağrısı başarısız: {Url}", url);
+            return new SasListResponse(
+                [],
+                "API'ye bağlanılamadı (localhost:5135 kapalı olabilir). API projesini de çalıştırın.");
+        }
+    }
+
+    private SasNotFoundResponse? TryDeserializeNotFound(string body)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<SasNotFoundResponse>(body, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public async Task<SapBarcodeResult> CreateSasBarcodeAsync(
         CreateSasBarcodeRequest request,
         CancellationToken cancellationToken = default)
     {
-        var response = await httpClient.PostAsJsonAsync("api/sas/barcodes", request, cancellationToken);
-        return await ReadBarcodeResultAsync(response, "SAS barkod", cancellationToken);
+        try
+        {
+            var response = await httpClient.PostAsJsonAsync("api/sas/barcodes", request, cancellationToken);
+            return await ReadBarcodeResultAsync(response, "SAS barkod", cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or SocketException)
+        {
+            logger.LogError(ex, "SAS barkod API bağlantı hatası");
+            return new SapBarcodeResult(false, "API'ye bağlanılamadı. API projesini çalıştırın.", [], null);
+        }
     }
 
     public async Task<SapBarcodeResult> ReprintSasBarcodeAsync(
         ReprintSasBarcodeRequest request,
         CancellationToken cancellationToken = default)
     {
-        var response = await httpClient.PostAsJsonAsync("api/sas/barcodes/reprint", request, cancellationToken);
-        return await ReadBarcodeResultAsync(response, "SAS tekrar basım", cancellationToken);
+        try
+        {
+            var response = await httpClient.PostAsJsonAsync("api/sas/barcodes/reprint", request, cancellationToken);
+            return await ReadBarcodeResultAsync(response, "SAS tekrar basım", cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or SocketException)
+        {
+            logger.LogError(ex, "SAS tekrar basım API bağlantı hatası");
+            return new SapBarcodeResult(false, "API'ye bağlanılamadı. API projesini çalıştırın.", [], null);
+        }
     }
 
     private async Task<SapBarcodeResult> ReadBarcodeResultAsync(
@@ -118,6 +198,8 @@ public class FasonBarkodApiClient(
     }
 
     private record ApiErrorResponse(string? Error);
+
+    private record SasNotFoundResponse(string? Error, string? Hint, string? Diagnostic, string? SapMessage);
 }
 
 public static class ApiClientRegistration
@@ -132,6 +214,7 @@ public static class ApiClientRegistration
             client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
             client.DefaultRequestHeaders.Add("X-Api-Key", options.ApiKey);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            client.Timeout = TimeSpan.FromSeconds(90);
         });
 
         return services;

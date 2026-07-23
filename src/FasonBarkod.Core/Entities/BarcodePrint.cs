@@ -10,9 +10,20 @@ public class BarcodePrint
 
     public string SalesOrderNo { get; set; } = string.Empty;
 
+    public string? LineNo { get; set; }
+
+    public string? VendorCode { get; set; }
+
+    public LabelType? LabelType { get; set; }
+
     public string MaterialCode { get; set; } = string.Empty;
 
     public string? MaterialName { get; set; }
+
+    /// <summary>
+    /// SAP SERNR (tekrar basım için). Boşsa BarcodeNo ile doldurulabilir.
+    /// </summary>
+    public string? SerialNumber { get; set; }
 
     public decimal Quantity { get; set; }
 

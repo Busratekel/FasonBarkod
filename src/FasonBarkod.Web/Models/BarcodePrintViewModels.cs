@@ -29,6 +29,12 @@ public class BarcodePrintListItemViewModel
 
     public string SalesOrderNo { get; set; } = string.Empty;
 
+    public string? LineNo { get; set; }
+
+    public string? VendorCode { get; set; }
+
+    public LabelType? LabelType { get; set; }
+
     public string MaterialCode { get; set; } = string.Empty;
 
     public string? MaterialName { get; set; }
@@ -39,7 +45,43 @@ public class BarcodePrintListItemViewModel
 
     public string? PrintedBy { get; set; }
 
+    public string? SerialNumber { get; set; }
+
     public BarcodePrintStatus Status { get; set; }
 
     public bool SapSent { get; set; }
+}
+
+public class BarcodePrintIndexViewModel
+{
+    public List<BarcodePrintListItemViewModel> Items { get; set; } = [];
+
+    public string? VendorCode { get; set; }
+
+    public string? PurchaseOrderNo { get; set; }
+
+    public bool VendorCodeLocked { get; set; }
+
+    public string Sort { get; set; } = "date";
+
+    public string SortDir { get; set; } = "desc";
+
+    public int Page { get; set; } = 1;
+
+    public int PageSize { get; set; } = 50;
+
+    public int TotalCount { get; set; }
+
+    public int TotalPages => PageSize > 0
+        ? (int)Math.Ceiling(TotalCount / (double)PageSize)
+        : 0;
+}
+
+public class ConfirmQzPrintRequest
+{
+    public List<int> Ids { get; set; } = [];
+
+    public bool Success { get; set; }
+
+    public string? ErrorMessage { get; set; }
 }

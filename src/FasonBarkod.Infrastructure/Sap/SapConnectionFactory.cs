@@ -33,7 +33,7 @@ public class SapConnectionFactory(IOptions<SapOptions> options, ILogger<SapConne
             $"Language={sap.Language}; " +
             "PoolSize=5; Trace=0";
 
-        logger.LogInformation("SAP bağlantısı açılıyor: {Host} client {Client}", sap.AppServerHost, sap.Client);
+        logger.LogDebug("SAP bağlantısı: {Host} client {Client}", sap.AppServerHost, sap.Client);
 
         var connection = new SapConnection(connectionString);
         connection.Connect();

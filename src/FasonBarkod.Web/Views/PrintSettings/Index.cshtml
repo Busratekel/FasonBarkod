@@ -1,30 +1,53 @@
 @model PrintSettingsViewModel
 @{
     ViewData["Title"] = "Yazıcı Ayarları";
+    var useQz = Model.UseQzTray;
 }
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h1 class="h3 mb-1">Yazıcı Ayarları</h1>
         <p class="text-muted mb-0">
-            Operatör bilgisayarında kullanılacak yazıcıyı buradan belirleyin.
+            @(useQz
+                ? "Bu bilgisayardaki Windows yazıcıları QZ Tray üzerinden listelenir."
+                : "Sunucudaki Windows yazıcılarından birini seçin.")
         </p>
     </div>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" asp-controller="LabelTemplates" asp-action="Index">Etiket Tasarımları</a>
-    </div>
+    @if (User.IsInRole("Admin"))
+    {
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary" asp-controller="LabelTemplates" asp-action="Index">Etiket Tasarımları</a>
+        </div>
+    }
 </div>
 
-<div class="alert alert-info">
-    <strong>Nasıl çalışır?</strong>
-    Varsayılan yazıcı seçiliyse Windows'un belirlediği yazıcı kullanılır.
-    Listeden belirli bir yazıcı seçerseniz her basımda o yazıcıya gönderilir.
-</div>
+@if (TempData["Success"] is string ok)
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+@if (useQz)
+{
+    <p class="text-muted small mb-3" id="qzStatus">QZ Tray kontrol ediliyor…</p>
+}
+else if (Model.InstalledPrinters.Count == 0)
+{
+    <div class="alert alert-warning">
+        Yazıcı listesi boş. IIS Application Pool kimliğini <strong>LocalSystem</strong> yapın
+        veya yazıcıyı kuran Windows kullanıcısı olarak çalıştırın, sonra sayfayı yenileyin.
+    </div>
+}
 
 <div class="card shadow-sm">
-    <div class="card-header fw-semibold">Yazıcı Seçimi</div>
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span>Yazıcı Seçimi</span>
+        @if (useQz)
+        {
+            <button type="button" class="btn btn-sm btn-outline-primary" id="qzRefreshPrinters">Listeyi yenile</button>
+        }
+    </div>
     <div class="card-body">
-        <form asp-action="Index" method="post" class="row g-3">
+        <form asp-action="Index" method="post" class="row g-3" id="printSettingsForm">
             @Html.AntiForgeryToken()
 
             <div class="col-12">
@@ -33,10 +56,7 @@
                            id="useDefaultPrinter" @(Model.UseWindowsDefaultPrinter ? "checked" : null) />
                     <label class="form-check-label" for="useDefaultPrinter">
                         Windows varsayılan yazıcısı
-                        @if (!string.IsNullOrWhiteSpace(Model.DefaultPrinterName))
-                        {
-                            <span class="text-muted">(@Model.DefaultPrinterName)</span>
-                        }
+                        <span class="text-muted" id="defaultPrinterHint"></span>
                     </label>
                 </div>
             </div>
@@ -46,17 +66,31 @@
                     <div class="col">
                         <select name="SelectedPrinterName" class="form-select" id="printerSelect">
                             <option value="">— Yazıcı seçin —</option>
-                            @foreach (var printer in Model.InstalledPrinters)
+                            @if (!useQz)
                             {
-                                <option value="@printer" selected="@(printer == Model.SelectedPrinterName ? "selected" : null)">@printer</option>
+                                @foreach (var printer in Model.InstalledPrinters)
+                                {
+                                    if (printer == Model.SelectedPrinterName)
+                                    {
+                                        <option value="@printer" selected>@printer</option>
+                                    }
+                                    else
+                                    {
+                                        <option value="@printer">@printer</option>
+                                    }
+                                }
                             }
                         </select>
                     </div>
                     <div class="col-auto">
-                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                        <button type="submit" class="btn btn-primary" id="savePrinterBtn">Kaydet</button>
                     </div>
                 </div>
-                <div class="form-text">Bu bilgisayara tanımlı yazıcılar listelenir.</div>
+                <div class="form-text">
+                    @(useQz
+                        ? "Liste QZ Tray ile bu bilgisayardan gelir. Kaydet = bu PC için tercih."
+                        : "Bu sunucuya tanımlı Windows yazıcıları listelenir.")
+                </div>
             </div>
         </form>
     </div>
@@ -65,16 +99,86 @@
 @section Scripts {
     <script>
         (function () {
+            const useQz = @(useQz ? "true" : "false");
             const useDefaultPrinter = document.getElementById('useDefaultPrinter');
             const printerSelect = document.getElementById('printerSelect');
+            const statusEl = document.getElementById('qzStatus');
+            const defaultHint = document.getElementById('defaultPrinterHint');
+            const refreshBtn = document.getElementById('qzRefreshPrinters');
+            const form = document.getElementById('printSettingsForm');
+            const serverSelected = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.SelectedPrinterName ?? ""));
+
             function syncPrinterSelectState() {
                 if (!printerSelect || !useDefaultPrinter) return;
                 printerSelect.disabled = useDefaultPrinter.checked;
             }
+
             if (useDefaultPrinter) {
                 useDefaultPrinter.addEventListener('change', syncPrinterSelectState);
                 syncPrinterSelectState();
             }
+
+            if (!useQz || typeof FasonQz === 'undefined') {
+                return;
+            }
+
+            function fillSelect(printers, preferred) {
+                const current = preferred || FasonQz.getSavedPrinter() || serverSelected || '';
+                printerSelect.innerHTML = '<option value="">— Yazıcı seçin —</option>';
+                printers.forEach(function (name) {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    if (name === current) opt.selected = true;
+                    printerSelect.appendChild(opt);
+                });
+                if (FasonQz.getUseDefault()) {
+                    useDefaultPrinter.checked = true;
+                } else if (current) {
+                    useDefaultPrinter.checked = false;
+                }
+                syncPrinterSelectState();
+            }
+
+            function loadPrinters() {
+                if (statusEl) statusEl.textContent = 'QZ Tray bağlanıyor…';
+                // Tek QZ çağrısı (find) — ekstra getDefault yok, üst üste Allow olmasın
+                return FasonQz.listPrinters()
+                    .then(function (printers) {
+                        fillSelect(printers || []);
+                        if (statusEl) {
+                            statusEl.textContent = 'QZ Tray bağlı — ' + (printers ? printers.length : 0) + ' yazıcı.';
+                            statusEl.className = 'text-muted small mb-3 text-success';
+                        }
+                    })
+                    .catch(function (err) {
+                        if (statusEl) {
+                            statusEl.textContent = 'QZ Tray bağlantısı yok' +
+                                (err && err.message ? ': ' + err.message : '') + '.';
+                            statusEl.className = 'text-muted small mb-3 text-danger';
+                        }
+                    });
+            }
+
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', function () { loadPrinters(); });
+            }
+
+            if (form) {
+                form.addEventListener('submit', function () {
+                    FasonQz.savePrinter(
+                        printerSelect.value,
+                        useDefaultPrinter.checked
+                    );
+                });
+            }
+
+            // Kaydedilmiş tercihi forma yansıt
+            if (FasonQz.getUseDefault()) {
+                useDefaultPrinter.checked = true;
+            }
+            syncPrinterSelectState();
+            loadPrinters();
         })();
     </script>
 }

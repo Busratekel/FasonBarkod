@@ -7,6 +7,10 @@ namespace FasonBarkod.Infrastructure.Printing;
 [SupportedOSPlatform("windows")]
 internal static class WindowsRawPrinter
 {
+    /// <summary>
+    /// RAW veri gönderir. StartPage/EndPage çağrılmaz — bazı SATO sürücüleri
+    /// her sayfada ekstra etiket beslemesi yapıp "dolu/boş" üretir.
+    /// </summary>
     public static void Send(string printerName, byte[] data)
     {
         if (string.IsNullOrWhiteSpace(printerName))
@@ -34,21 +38,9 @@ internal static class WindowsRawPrinter
 
             try
             {
-                if (!StartPagePrinter(printerHandle))
+                if (!WritePrinter(printerHandle, data, data.Length, out _))
                 {
-                    throw new InvalidOperationException($"StartPagePrinter başarısız (Win32: {Marshal.GetLastWin32Error()})");
-                }
-
-                try
-                {
-                    if (!WritePrinter(printerHandle, data, data.Length, out _))
-                    {
-                        throw new InvalidOperationException($"WritePrinter başarısız (Win32: {Marshal.GetLastWin32Error()})");
-                    }
-                }
-                finally
-                {
-                    EndPagePrinter(printerHandle);
+                    throw new InvalidOperationException($"WritePrinter başarısız (Win32: {Marshal.GetLastWin32Error()})");
                 }
             }
             finally
@@ -65,6 +57,39 @@ internal static class WindowsRawPrinter
     public static byte[] ToPrinterEncoding(string rawData) =>
         PrinterEncoding.GetBytes(rawData);
 
+    /// <summary>
+    /// Birden fazla SBPL etiketini tek Windows print job'unda birleştirir.
+    /// Her etiket için ayrı StartDoc açmak yazıcıda boş etiket beslemesine yol açabilir.
+    /// </summary>
+    public static byte[] ConcatRawJobs(IEnumerable<string> renderedLabels)
+    {
+        var parts = renderedLabels
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Select(PrinterEncoding.GetBytes)
+            .ToList();
+
+        if (parts.Count == 0)
+        {
+            return [];
+        }
+
+        if (parts.Count == 1)
+        {
+            return parts[0];
+        }
+
+        var total = parts.Sum(p => p.Length);
+        var buffer = new byte[total];
+        var offset = 0;
+        foreach (var part in parts)
+        {
+            Buffer.BlockCopy(part, 0, buffer, offset, part.Length);
+            offset += part.Length;
+        }
+
+        return buffer;
+    }
+
     [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
 
@@ -76,12 +101,6 @@ internal static class WindowsRawPrinter
 
     [DllImport("winspool.drv", SetLastError = true)]
     private static extern bool EndDocPrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    private static extern bool StartPagePrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    private static extern bool EndPagePrinter(IntPtr hPrinter);
 
     [DllImport("winspool.drv", SetLastError = true)]
     private static extern bool WritePrinter(

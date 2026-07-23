@@ -15,7 +15,17 @@
                     <dt class="col-sm-4">Barkod No</dt>
                     <dd class="col-sm-8 fw-semibold">@Model.BarcodeNo</dd>
                     <dt class="col-sm-4">Sipariş</dt>
-                    <dd class="col-sm-8">@Model.SalesOrderNo</dd>
+                    <dd class="col-sm-8">@Model.SalesOrderNo @(!string.IsNullOrWhiteSpace(Model.LineNo) ? $"/ {Model.LineNo}" : "")</dd>
+                    @if (!string.IsNullOrWhiteSpace(Model.VendorCode))
+                    {
+                        <dt class="col-sm-4">Satıcı Kodu</dt>
+                        <dd class="col-sm-8">@Model.VendorCode</dd>
+                    }
+                    @if (Model.LabelType.HasValue)
+                    {
+                        <dt class="col-sm-4">Etiket Tipi</dt>
+                        <dd class="col-sm-8">@(Model.LabelType == LabelType.KoliUstu ? "Koli Üstü" : "Koli İçi")</dd>
+                    }
                     <dt class="col-sm-4">Malzeme</dt>
                     <dd class="col-sm-8">@Model.MaterialCode @Model.MaterialName</dd>
                     <dt class="col-sm-4">Adet</dt>

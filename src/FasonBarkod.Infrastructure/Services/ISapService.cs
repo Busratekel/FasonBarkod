@@ -4,13 +4,18 @@ using FasonBarkod.Core.Sap;
 
 namespace FasonBarkod.Infrastructure.Services;
 
+/// <summary>
+/// SAP kalemleri ve SAP'nin IT_HATA tablosuna yazdığı mesajlar (varsa).
+/// </summary>
+public record SasListResult(IReadOnlyList<SasLineDto> Lines, IReadOnlyList<string> SapMessages);
+
 
 
 public interface ISapService
 
 {
 
-    Task<IReadOnlyList<SasLineDto>> ListSasAsync(
+    Task<SasListResult> ListSasAsync(
 
         string purchaseOrderNo,
 

@@ -5,11 +5,44 @@ namespace FasonBarkod.Web.Models;
 
 public class SasSearchViewModel
 {
-    [Required(ErrorMessage = "SAS numarası zorunludur.")]
     [Display(Name = "SAS Numarası")]
-    public string PurchaseOrderNo { get; set; } = string.Empty;
+    public string? PurchaseOrderNo { get; set; }
 
     [Display(Name = "Satıcı Kodu")]
+    public string? VendorCode { get; set; }
+
+    /// <summary>
+    /// Operatör hesabında satıcı kodu kilitli (kullanıcı kartından gelir).
+    /// </summary>
+    public bool VendorCodeLocked { get; set; }
+
+    /// <summary>
+    /// SAP açık listesinde LIFNR yok; yalnızca satıcı bilindiğinde sütun gösterilir.
+    /// </summary>
+    public bool ShowVendorColumn { get; set; }
+
+    /// <summary>
+    /// SAS no boş bırakıldığında SAP'ten dönen sipariş özeti (sayfalanmış).
+    /// </summary>
+    public List<SasOrderSummaryViewModel> Orders { get; set; } = [];
+
+    public string? ListMessage { get; set; }
+
+    public int Page { get; set; } = 1;
+
+    public int PageSize { get; set; } = 10;
+
+    public int TotalCount { get; set; }
+
+    public int TotalPages =>
+        PageSize <= 0 ? 1 : Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+}
+
+public class SasOrderSummaryViewModel
+{
+    public string PurchaseOrderNo { get; set; } = string.Empty;
+    public int LineCount { get; set; }
+    public string? SampleMaterial { get; set; }
     public string? VendorCode { get; set; }
 }
 

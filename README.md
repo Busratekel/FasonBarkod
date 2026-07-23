@@ -78,6 +78,17 @@ dotnet run --project src/FasonBarkod.Web
 
 Test SAS no (mock veri): `50001234`
 
+## QZ Tray (yerel yazıcı)
+
+Etiket basımı operatör PC'sindeki yazıcılara **QZ Tray** ile gider (`Printer:UseQzTray=true`).
+
+1. Her operatör PC'sine [QZ Tray](https://qz.io/download/) kurun ve çalıştırın.
+2. **Allow uyarıları için (bir kez):** QZ Tray → Advanced → Site Manager → Create New → masaüstündeki `digital-certificate.txt` + `private-key.pem` dosyalarını `src/FasonBarkod.Web/QzSigning/` klasörüne kopyalayın; Web’i yeniden başlatın. İlk Allow’da **Remember this decision** seçin.
+3. Siteye giriş → **Yazıcı** menüsünden bu PC'deki yazıcıyı seçip kaydedin.
+4. SAS ekranından basım: sunucu etiketi üretir, tarayıcı QZ ile yazıcıya gönderir.
+
+Eski sunucu-spooler davranışı için: `"UseQzTray": false`.
+
 ## SAP test bağlantısı
 
 User Secrets (API projesi — şifre repoda değil):

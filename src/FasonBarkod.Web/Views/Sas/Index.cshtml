@@ -1,29 +1,211 @@
 @model SasSearchViewModel
 @{
     ViewData["Title"] = "SAS Barkodu Alma";
+    var hasError = !ViewData.ModelState.IsValid && ViewData.ModelState.ErrorCount > 0;
+
+    string PageUrl(int p) => Url.Action("Index", new
+    {
+        vendorCode = Model.VendorCode,
+        page = p,
+        pageSize = Model.PageSize
+    })!;
 }
 
-<h1 class="h3 mb-4">SAS Barkodu Alma</h1>
-
-<div class="card shadow-sm">
-    <div class="card-body">
-        <form asp-action="Index" method="post" class="row g-3 align-items-end">
-            <div asp-validation-summary="ModelOnly" class="text-danger mb-2"></div>
-            <div class="col-md-4">
-                <label asp-for="PurchaseOrderNo" class="form-label">SAS Numarası</label>
-                <input asp-for="PurchaseOrderNo" class="form-control form-control-lg" autofocus />
-                <span asp-validation-for="PurchaseOrderNo" class="text-danger"></span>
-            </div>
-            <div class="col-md-5">
-                <label asp-for="VendorCode" class="form-label">Cari / Satıcı Kodu</label>
-                <input asp-for="VendorCode" class="form-control form-control-lg" />
-                <div class="form-text">SAP satıcı kodu (LIFNR). Test SAS için boş bırakın.</div>
-            </div>
-            <div class="col-md-3">
-                <button type="submit" class="btn btn-success btn-lg w-100">LİSTELE</button>
-            </div>
-        </form>
+<div class="sas-search-page">
+    <div class="sas-search-hero">
+        <div class="sas-search-hero__text">
+            <h1 class="sas-search-hero__title">SAS Barkodu Alma</h1>
+            @if (Model.VendorCodeLocked)
+            {
+                <p class="sas-search-hero__subtitle mb-1">
+                    Size ait SAS'lar aşağıda listelenir.
+                    @if (!string.IsNullOrWhiteSpace(Model.VendorCode))
+                    {
+                        <span class="text-muted">Satıcı kodu: <strong>@Model.VendorCode</strong></span>
+                    }
+                </p>
+            }
+            else
+            {
+                <p class="sas-search-hero__subtitle">
+                    Tüm açık SAS'lar aşağıda listelenir. İsterseniz SAS veya cari kodu ile daraltın.
+                </p>
+            }
+        </div>
     </div>
+
+    @if (hasError)
+    {
+        <div asp-validation-summary="ModelOnly" class="alert alert-danger mt-2 mb-0"></div>
+    }
+
+    @if (!Model.VendorCodeLocked)
+    {
+        <div class="sas-search-panel @(hasError ? "sas-search-panel--error" : null)">
+            <form asp-action="Index" method="post" class="sas-search-form" novalidate>
+                <input type="hidden" name="PageSize" value="@Model.PageSize" />
+
+                <div class="sas-search-fields">
+                    <div class="sas-search-field">
+                        <label asp-for="PurchaseOrderNo" class="sas-search-label">
+                            SAS Numarası
+                            <span class="sas-search-optional">opsiyonel</span>
+                        </label>
+                        <div class="sas-search-input-wrap">
+                            <span class="sas-search-input-icon" aria-hidden="true">#</span>
+                            <input asp-for="PurchaseOrderNo"
+                                   class="sas-search-input"
+                                   inputmode="numeric"
+                                   autocomplete="off"
+                                   autofocus
+                                   placeholder="Boş bırakılabilir"
+                                   data-val="false" />
+                        </div>
+                        <span asp-validation-for="PurchaseOrderNo" class="sas-search-field-error"></span>
+                    </div>
+
+                    <div class="sas-search-field">
+                        <label asp-for="VendorCode" class="sas-search-label">
+                            Cari / Satıcı Kodu
+                            <span class="sas-search-optional">opsiyonel</span>
+                        </label>
+                        <div class="sas-search-input-wrap">
+                            <span class="sas-search-input-icon" aria-hidden="true">◎</span>
+                            <input asp-for="VendorCode"
+                                   class="sas-search-input"
+                                   inputmode="numeric"
+                                   autocomplete="off" />
+                        </div>
+                    </div>
+
+                    <div class="sas-search-action">
+                        <button type="submit" class="sas-search-submit">
+                            <span class="sas-search-submit__icon" aria-hidden="true">→</span>
+                            <span>Ara</span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Model.ListMessage))
+    {
+        <p class="text-muted mt-3 mb-2">@Model.ListMessage</p>
+    }
+
+    @if (Model.TotalCount > 0)
+    {
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2 mb-2">
+            <p class="text-muted small mb-0">
+                Toplam @Model.TotalCount SAS — sayfa @Model.Page / @Model.TotalPages
+            </p>
+            <form method="get" class="d-flex align-items-center gap-2">
+                @if (!Model.VendorCodeLocked)
+                {
+                    <input type="hidden" name="vendorCode" value="@Model.VendorCode" />
+                }
+                <input type="hidden" name="page" value="1" />
+                <label class="text-muted small mb-0" for="sasPageSize">Sayfa boyutu</label>
+                <select id="sasPageSize" name="pageSize" class="form-select form-select-sm" style="width: auto;"
+                        onchange="this.form.submit()">
+                    @foreach (var size in new[] { 10, 25, 50, 100 })
+                    {
+                        if (Model.PageSize == size)
+                        {
+                            <option value="@size" selected>@size</option>
+                        }
+                        else
+                        {
+                            <option value="@size">@size</option>
+                        }
+                    }
+                </select>
+            </form>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>SAS No</th>
+                            @if (Model.ShowVendorColumn)
+                            {
+                                <th>Satıcı Kodu</th>
+                            }
+                            <th>Kalem</th>
+                            <th>Örnek malzeme</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var order in Model.Orders)
+                    {
+                        var vendor = !string.IsNullOrWhiteSpace(order.VendorCode)
+                            ? order.VendorCode
+                            : Model.VendorCode;
+                        <tr>
+                            <td class="fw-semibold">@order.PurchaseOrderNo</td>
+                            @if (Model.ShowVendorColumn)
+                            {
+                                <td>@(string.IsNullOrWhiteSpace(vendor) ? "—" : vendor)</td>
+                            }
+                            <td>@order.LineCount</td>
+                            <td class="text-muted small">@order.SampleMaterial</td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-primary"
+                                   asp-action="Detail"
+                                   asp-route-id="@order.PurchaseOrderNo"
+                                   asp-route-vendorCode="@vendor">Aç</a>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        @if (Model.TotalPages > 1)
+        {
+            <nav class="mt-3" aria-label="SAS listesi sayfalama">
+                <ul class="pagination justify-content-center flex-wrap mb-0">
+                    <li class="page-item @(Model.Page <= 1 ? "disabled" : null)">
+                        <a class="page-link" href="@(Model.Page <= 1 ? "#" : PageUrl(Model.Page - 1))" aria-label="Önceki">‹</a>
+                    </li>
+                    @{
+                        var start = Math.Max(1, Model.Page - 2);
+                        var end = Math.Min(Model.TotalPages, Model.Page + 2);
+                        if (start > 1)
+                        {
+                            <li class="page-item"><a class="page-link" href="@PageUrl(1)">1</a></li>
+                            if (start > 2)
+                            {
+                                <li class="page-item disabled"><span class="page-link">…</span></li>
+                            }
+                        }
+                        for (var p = start; p <= end; p++)
+                        {
+                            <li class="page-item @(p == Model.Page ? "active" : null)">
+                                <a class="page-link" href="@PageUrl(p)">@p</a>
+                            </li>
+                        }
+                        if (end < Model.TotalPages)
+                        {
+                            if (end < Model.TotalPages - 1)
+                            {
+                                <li class="page-item disabled"><span class="page-link">…</span></li>
+                            }
+                            <li class="page-item"><a class="page-link" href="@PageUrl(Model.TotalPages)">@Model.TotalPages</a></li>
+                        }
+                    }
+                    <li class="page-item @(Model.Page >= Model.TotalPages ? "disabled" : null)">
+                        <a class="page-link" href="@(Model.Page >= Model.TotalPages ? "#" : PageUrl(Model.Page + 1))" aria-label="Sonraki">›</a>
+                    </li>
+                </ul>
+            </nav>
+        }
+    }
 </div>
 
 @section Scripts {

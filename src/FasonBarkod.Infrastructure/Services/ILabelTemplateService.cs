@@ -45,6 +45,7 @@ public static class LabelTemplatePlaceholders
         ("@BARKOD4T", "Barkod 4 (koli üstü)"),
         ("@QR", "QR kod içeriği (Barkod1)"),
         ("@Counter", "Sıra no"),
+        ("@C", "Sıra no (kısa)"),
         ("@T", "Saat (HH:mm)"),
         ("@ZBRKD_YIL", "Yıl"),
         ("@ZBRKD_SAAT", "Saat (HH:mm)")

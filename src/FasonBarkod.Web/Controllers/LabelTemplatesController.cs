@@ -133,29 +133,41 @@ public class LabelTemplatesController(
             IsActive = template.IsActive
         };
 
+    // NOT: Gerçek SBPL (<ESC>=0x1B). Her şablonda A1 medya boyutu gömülü (appsettings'ten bağımsız).
+    // Koli üstü: dikey ~110x80mm (V0880 H0640 @203dpi).
+    // Koli içi: yatay ~50x100mm (V0400 H0800).
+    // QR: BQ abcc — a=ECC, b=concat, cc=hücre(2 hane).
     private static string GetStarterTemplate(LabelType labelType) =>
         labelType == LabelType.KoliUstu
-            ? """
-              ^L
-              Dy2-me-dd
-              H10,30,@BARKOD1
-              A40,30,0,3,3,0,0,@MAKTX
-              A40,70,0,2,2,0,0,@MATNR
-              A40,100,0,2,2,0,0,KOLI @ZPAKET ADET
-              A40,130,0,2,2,0,0,SAS @EBELN / @EBELP
-              A40,160,0,2,2,0,0,@BRAND @ZYIL-H@ZHAFTA
-              ^E
-              """
-            : """
-              ^L
-              Dy2-me-dd
-              H10,30,@BARKOD1
-              H10,90,@BARKOD2
-              A40,30,0,2,2,0,0,@MAKTX
-              A40,60,0,2,2,0,0,@MATNR
-              A40,90,0,2,2,0,0,SERNR @SERNR
-              A40,120,0,2,2,0,0,SAS @EBELN / @EBELP
-              A40,150,0,2,2,0,0,@BRAND
-              ^E
-              """;
+            ? "\u001BA\n" +
+              "\u001BA1V00880H00640\n" +
+              "\u001BV0030\u001BH0010\u001BXM@ZYIL / @ZHAFTA  @C\n" +
+              "\u001BV0020\u001BH0340\u001BXB1@BEZEI\n" +
+              "\u001BV0020\u001BH0660\u001BBQ2005,1@QR\n" +
+              "\u001BV0120\u001BH0010\u001BXB1@MATNR\n" +
+              "\u001BV0190\u001BH0010\u001BXB1@MAKTX\n" +
+              "\u001BV0270\u001BH0100\u001BXB1KOLI ( @ZPAKET ADET )\n" +
+              "\u001BV0350\u001BH0010\u001BXS@TARIH\n" +
+              "\u001BV0350\u001BH0200\u001BXS@T\n" +
+              "\u001BV0400\u001BH0010\u001BBG02160@BARKOD3T\n" +
+              "\u001BV0575\u001BH0010\u001BXM@BARKOD3T\n" +
+              "\u001BV0620\u001BH0010\u001BBG02160@BARKOD4T\n" +
+              "\u001BV0795\u001BH0010\u001BXM@BARKOD4T\n" +
+              "\u001BV0840\u001BH0010\u001BXMKod: @MATNR\n" +
+              "\u001BQ000001\n" +
+              "\u001BZ"
+            // Sol: MAKTX + barkod1+metin + barkod2+metin
+            // Sağ üst: küçük QR + yanında marka + altında counter/T
+            : "\u001BA\n" +
+              "\u001BA1V00400H00800\n" +
+              "\u001BV0015\u001BH0015\u001BXS@MAKTX\n" +
+              "\u001BV0015\u001BH0580\u001BBQ2003,1@QR\n" +
+              "\u001BV0015\u001BH0660\u001BXS@BEZEI\n" +
+              "\u001BV0045\u001BH0660\u001BXS@Counter / @T\n" +
+              "\u001BV0045\u001BH0015\u001BBG02048@BARKOD1\n" +
+              "\u001BV0100\u001BH0015\u001BXS@BARKOD1\n" +
+              "\u001BV0125\u001BH0015\u001BBG02050@BARKOD2\n" +
+              "\u001BV0185\u001BH0015\u001BXS@BARKOD2\n" +
+              "\u001BQ000001\n" +
+              "\u001BZ";
 }

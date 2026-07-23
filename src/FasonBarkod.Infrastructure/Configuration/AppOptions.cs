@@ -49,6 +49,12 @@ public class PrinterOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
+    /// true: etiket sunucuda üretilir, basım operatör PC'sindeki QZ Tray ile yapılır.
+    /// false: sunucu Windows spooler'a raw gönderir (eski davranış).
+    /// </summary>
+    public bool UseQzTray { get; set; } = true;
+
+    /// <summary>
     /// Geliştirme ortamında fiziksel yazıcı yerine .prn dosyası üretir.
     /// </summary>
     public bool SimulatePrint { get; set; }
@@ -62,4 +68,33 @@ public class PrinterOptions
     public string TemplateFolder { get; set; } = "Templates";
 
     public string SimulateOutputFolder { get; set; } = "PrintOutput";
+
+    /// <summary>
+    /// Şablonda A1 yoksa yedek medya yüksekliği (mm). Koli üstü/içi şablonlarında A1 gömülü;
+    /// bu ayar yalnızca A1'siz özel şablon / test baskısı için kullanılır.
+    /// </summary>
+    public int LabelHeightMm { get; set; } = 110;
+
+    /// <summary>
+    /// Şablonda A1 yoksa yedek medya genişliği (mm).
+    /// </summary>
+    public int LabelWidthMm { get; set; } = 80;
+
+    public int Dpi { get; set; } = 203;
+
+    /// <summary>
+    /// QZ Tray digital-certificate.txt yolu (ContentRoot göreli veya mutlak).
+    /// QzCertificatePem doluysa dosya yerine bu kullanılır.
+    /// </summary>
+    public string QzCertificatePath { get; set; } = "QzSigning/digital-certificate.txt";
+
+    /// <summary>
+    /// Sertifika PEM metni (appsettings'e gömülebilir). Public key — istemciye gider.
+    /// </summary>
+    public string QzCertificatePem { get; set; } = string.Empty;
+
+    /// <summary>
+    /// QZ Tray private-key.pem yolu (sunucuda kalır, wwwroot'a koyulmaz).
+    /// </summary>
+    public string QzPrivateKeyPath { get; set; } = "QzSigning/private-key.pem";
 }

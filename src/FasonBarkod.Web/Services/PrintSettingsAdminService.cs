@@ -1,8 +1,6 @@
-using FasonBarkod.Infrastructure.Configuration;
 using FasonBarkod.Infrastructure.Printing;
 using FasonBarkod.Web.Models;
 using FasonBarkod.Web.Services;
-using Microsoft.Extensions.Options;
 
 namespace FasonBarkod.Web.Services;
 
@@ -19,11 +17,17 @@ public class PrintSettingsAdminService(
     {
         var settings = await settingsStore.GetAsync(cancellationToken);
         var defaultPrinter = printerDiscovery.GetDefaultPrinterName();
-        var installedPrinters = printerDiscovery.GetInstalledPrinters();
+        var installedPrinters = printerDiscovery.GetInstalledPrinters().ToList();
+
+        if (!string.IsNullOrWhiteSpace(settings.PrinterName)
+            && !installedPrinters.Contains(settings.PrinterName, StringComparer.OrdinalIgnoreCase))
+        {
+            installedPrinters.Insert(0, settings.PrinterName);
+        }
 
         return new PrintSettingsViewModel
         {
-            InstalledPrinters = installedPrinters.ToList(),
+            InstalledPrinters = installedPrinters,
             DefaultPrinterName = defaultPrinter,
             SelectedPrinterName = settings.PrinterName ?? defaultPrinter ?? string.Empty,
             UseWindowsDefaultPrinter = string.IsNullOrWhiteSpace(settings.PrinterName)

@@ -44,7 +44,10 @@ builder.Services.AddDefaultIdentity<ApplicationUser>(options =>
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>();
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews(options =>
+{
+    options.Filters.Add<FasonBarkod.Web.Filters.QzTrayViewBagFilter>();
+});
 builder.Services.Configure<TestingOptions>(builder.Configuration.GetSection(TestingOptions.SectionName));
 builder.Services.AddRazorPages();
 builder.Services.AddDistributedMemoryCache();
@@ -57,6 +60,8 @@ builder.Services.AddSession(options =>
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IPrintSettingsStore, DbPrintSettingsStore>();
 builder.Services.AddScoped<IPrintSettingsAdminService, PrintSettingsAdminService>();
+builder.Services.AddSingleton<IQzSigningService, QzSigningService>();
+builder.Services.AddScoped<FasonBarkod.Web.Filters.QzTrayViewBagFilter>();
 
 var app = builder.Build();
 
@@ -79,10 +84,9 @@ if (app.Environment.IsDevelopment())
 else
 {
     app.UseExceptionHandler("/Home/Error");
-    app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// İç ağda HTTP ile çalışır; sertifika / HTTPS gerekmez.
 app.UseRequestLocalization();
 app.UseRouting();
 

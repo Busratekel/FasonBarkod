@@ -58,13 +58,20 @@
 
                             </li>
 
+                            @if (User.IsInRole("Admin") || User.IsInRole("Operator"))
+                            {
+                                <li class="nav-item">
+                                    <a class="nav-link text-white" asp-controller="PrintSettings" asp-action="Index">Yazıcı</a>
+                                </li>
+                            }
+
                             @if (User.IsInRole("Admin"))
                             {
                                 <li class="nav-item">
                                     <a class="nav-link text-white" asp-controller="LabelTemplates" asp-action="Index">Etiket Tasarımları</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link text-white" asp-controller="PrintSettings" asp-action="Index">Yazıcı</a>
+                                    <a class="nav-link text-white" asp-controller="Users" asp-action="Index">Kullanıcılar</a>
                                 </li>
                             }
 
@@ -105,14 +112,68 @@
     </footer>
 
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
-
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-
     <script src="~/js/site.js" asp-append-version="true"></script>
+    @if (ViewBag.QzTrayEnabled == true)
+    {
+        @if (ViewBag.QzCertificatePem is string qzCert && !string.IsNullOrWhiteSpace(qzCert))
+        {
+            <script>
+                window.FASON_QZ_CERT = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(qzCert));
+            </script>
+        }
+        <script src="~/lib/qz/qz-tray.js" asp-append-version="true"></script>
+        <script src="~/js/fason-qz.js" asp-append-version="true"></script>
+        <div id="qz-print-toast" class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080; display: none;">
+            <div class="toast show align-items-center text-bg-dark border-0" role="status">
+                <div class="d-flex">
+                    <div class="toast-body" id="qz-print-toast-body">Yazdırılıyor…</div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="document.getElementById('qz-print-toast').style.display='none'"></button>
+                </div>
+            </div>
+        </div>
+        <script>
+            (function () {
+                var pending = @Html.Raw(ViewBag.QzPendingJobsJson as string ?? "null");
+                var printIds = @Html.Raw(ViewBag.QzPendingPrintIdsJson as string ?? "null");
+                if (!pending || !window.FasonQz) return;
 
+                var toast = document.getElementById('qz-print-toast');
+                var body = document.getElementById('qz-print-toast-body');
+                function show(msg, ok) {
+                    if (!toast || !body) return;
+                    body.textContent = msg;
+                    toast.style.display = 'block';
+                    toast.querySelector('.toast').className =
+                        'toast show align-items-center border-0 ' + (ok ? 'text-bg-success' : 'text-bg-danger');
+                }
+
+                function confirmStatus(ok, errMsg) {
+                    if (!printIds || !printIds.length) return;
+                    fetch('@Url.Action("ConfirmQzPrint", "BarcodePrints")', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ ids: printIds, success: !!ok, errorMessage: errMsg || null })
+                    }).catch(function () { /* durum güncellemesi sessizce başarısız olabilir */ });
+                }
+
+                show('QZ Tray ile yazdırılıyor…', true);
+                FasonQz.printBase64Jobs(pending)
+                    .then(function (r) {
+                        confirmStatus(true);
+                        show(r.count + ' etiket gönderildi: ' + r.printer, true);
+                        setTimeout(function () { toast.style.display = 'none'; }, 5000);
+                    })
+                    .catch(function (err) {
+                        var msg = err && err.message ? err.message : String(err);
+                        confirmStatus(false, msg);
+                        show('Yazdırma hatası: ' + msg, false);
+                    });
+            })();
+        </script>
+    }
     @await RenderSectionAsync("Scripts", required: false)
-
 </body>
-
 </html>
 

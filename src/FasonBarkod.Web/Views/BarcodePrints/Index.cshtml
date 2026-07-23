@@ -1,4 +1,4 @@
-@model IEnumerable<BarcodePrintListItemViewModel>
+@model BarcodePrintIndexViewModel
 @using FasonBarkod.Core.Enums
 @{
     ViewData["Title"] = "Basım Geçmişi";
@@ -21,23 +21,99 @@
         BarcodePrintStatus.Printed => "primary",
         _ => "warning"
     };
+
+    string LabelTypeName(LabelType? labelType) => labelType switch
+    {
+        LabelType.KoliUstu => "Koli Üstü",
+        LabelType.KoliIci => "Koli İçi",
+        _ => "-"
+    };
+
+    string SortLink(string column, string title)
+    {
+        var nextDir = Model.Sort == column && Model.SortDir == "desc" ? "asc" : "desc";
+        var arrow = Model.Sort == column
+            ? (Model.SortDir == "asc" ? " ↑" : " ↓")
+            : string.Empty;
+
+        return $"<a class=\"text-decoration-none\" href=\"{Url.Action("Index", new
+        {
+            vendorCode = Model.VendorCode,
+            purchaseOrderNo = Model.PurchaseOrderNo,
+            sort = column,
+            sortDir = nextDir,
+            page = 1,
+            pageSize = Model.PageSize
+        })}\">{title}{arrow}</a>";
+    }
 }
 
 <h1 class="h3 mb-2">Basım Geçmişi</h1>
-<p class="text-muted small mb-3">
-    Bu liste SAP'ten canlı çekilmez. Bu uygulamada <strong>ZMM_N_SAS_B başarılı</strong> olan basımlar kaydedilir.
-    SAP'teki basılan koli sayısı için SAS detay tablosundaki <strong>Basılan Koli</strong> sütununa bakın.
-</p>
+@if (Model.VendorCodeLocked && !string.IsNullOrWhiteSpace(Model.VendorCode))
+{
+    <p class="text-muted small mb-3">
+        Satıcı: <strong>@Model.VendorCode</strong> — bu cariye ait tüm basımlar.
+    </p>
+}
+else if (!Model.VendorCodeLocked)
+{
+    <p class="text-muted small mb-3">Admin: satıcı / SAS ile filtreleyebilirsiniz.</p>
+}
+
+<form method="get" class="row g-2 align-items-end mb-3">
+    <div class="col-md-3">
+        <label class="form-label small mb-1">SAS Numarası</label>
+        <input type="text" name="purchaseOrderNo" value="@Model.PurchaseOrderNo" class="form-control" placeholder="4500..." />
+    </div>
+    @if (!Model.VendorCodeLocked)
+    {
+        <div class="col-md-3">
+            <label class="form-label small mb-1">Satıcı Kodu</label>
+            <input type="text" name="vendorCode" value="@Model.VendorCode" class="form-control" placeholder="1000123" />
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Model.VendorCode))
+    {
+        <input type="hidden" name="vendorCode" value="@Model.VendorCode" />
+    }
+    <input type="hidden" name="sort" value="@Model.Sort" />
+    <input type="hidden" name="sortDir" value="@Model.SortDir" />
+    <div class="col-md-2">
+        <label class="form-label small mb-1">Sayfa Boyutu</label>
+        <select name="pageSize" class="form-select">
+            @foreach (var size in new[] { 5, 15, 25, 50, 100 })
+            {
+                if (Model.PageSize == size)
+                {
+                    <option value="@size" selected>@size</option>
+                }
+                else
+                {
+                    <option value="@size">@size</option>
+                }
+            }
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">Filtrele</button>
+    </div>
+</form>
+
+@if (Model.TotalCount > 0)
+{
+    <p class="text-muted small">Toplam @Model.TotalCount kayıt — sayfa @Model.Page / @Model.TotalPages</p>
+}
 
 <div class="table-responsive">
     <table class="table table-striped align-middle">
         <thead class="table-light">
             <tr>
-                <th>Barkod No</th>
-                <th>Sipariş</th>
+                <th>@Html.Raw(SortLink("barcode", "Barkod No"))</th>
+                <th>@Html.Raw(SortLink("order", "Sipariş"))</th>
+                <th>Etiket</th>
                 <th>Malzeme</th>
                 <th class="text-end">Adet</th>
-                <th>Tarih</th>
+                <th>@Html.Raw(SortLink("date", "Tarih"))</th>
                 <th>Basan</th>
                 <th>Durum</th>
                 <th>SAP</th>
@@ -45,11 +121,12 @@
             </tr>
         </thead>
         <tbody>
-        @foreach (var item in Model)
+        @foreach (var item in Model.Items)
         {
             <tr>
                 <td class="fw-semibold">@item.BarcodeNo</td>
-                <td>@item.SalesOrderNo</td>
+                <td>@item.SalesOrderNo @(!string.IsNullOrWhiteSpace(item.LineNo) ? $"/ {item.LineNo}" : "")</td>
+                <td>@LabelTypeName(item.LabelType)</td>
                 <td>@item.MaterialCode @(!string.IsNullOrWhiteSpace(item.MaterialName) ? $"({item.MaterialName})" : "")</td>
                 <td class="text-end">@item.Quantity.ToString("N0")</td>
                 <td>@item.PrintDate.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
@@ -65,7 +142,26 @@
     </table>
 </div>
 
-@if (!Model.Any())
+@if (!Model.Items.Any())
 {
     <p class="text-muted">Henüz basım kaydı yok.</p>
+}
+
+@if (Model.TotalPages > 1)
+{
+    <nav aria-label="Basım geçmişi sayfalama">
+        <ul class="pagination">
+            @for (var p = 1; p <= Model.TotalPages; p++)
+            {
+                <li class="page-item @(p == Model.Page ? "active" : "")">
+                    <a class="page-link" asp-action="Index" asp-route-page="@p"
+                       asp-route-vendorCode="@Model.VendorCode"
+                       asp-route-purchaseOrderNo="@Model.PurchaseOrderNo"
+                       asp-route-sort="@Model.Sort"
+                       asp-route-sortDir="@Model.SortDir"
+                       asp-route-pageSize="@Model.PageSize">@p</a>
+                </li>
+            }
+        </ul>
+    </nav>
 }

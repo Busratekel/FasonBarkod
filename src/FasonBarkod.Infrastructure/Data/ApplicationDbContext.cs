@@ -21,6 +21,12 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     {
         base.OnModelCreating(builder);
 
+        builder.Entity<ApplicationUser>(entity =>
+        {
+            entity.Property(e => e.FullName).HasMaxLength(100);
+            entity.Property(e => e.VendorCode).HasMaxLength(20);
+        });
+
         builder.Entity<SalesOrderLine>(entity =>
         {
             entity.HasIndex(e => e.SalesOrderNo);
@@ -32,6 +38,11 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             entity.HasIndex(e => e.BarcodeNo);
             entity.HasIndex(e => e.SalesOrderNo);
+            entity.HasIndex(e => e.VendorCode);
+            entity.HasIndex(e => e.PrintDate);
+            entity.Property(e => e.VendorCode).HasMaxLength(20);
+            entity.Property(e => e.LineNo).HasMaxLength(20);
+            entity.Property(e => e.SerialNumber).HasMaxLength(64);
             entity.Property(e => e.Quantity).HasPrecision(18, 3);
             entity.HasOne(e => e.PrintedByUser)
                 .WithMany()
@@ -50,6 +61,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         builder.Entity<AppPrintSettings>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.PrinterName).HasMaxLength(512);
         });
 

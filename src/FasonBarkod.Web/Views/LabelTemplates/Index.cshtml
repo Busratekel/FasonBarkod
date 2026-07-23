@@ -17,18 +17,9 @@
     </div>
 </div>
 
-<div class="alert alert-info">
-    <strong>Nasıl çalışır?</strong>
-    Basım sırasında SAP'ten gelen <em>malzeme grubu kodu</em> ile eşleşen tasarım otomatik seçilir.
-    Markaya özel tasarım yoksa <strong>varsayılan</strong> (marka alanı boş) tasarım kullanılır.
-</div>
-
 @if (Model.Count == 0)
 {
-    <div class="alert alert-warning">
-        Henüz tasarım yok.
-        <a asp-action="Create">İlk tasarımı oluşturun</a> — en az bir koli üstü ve bir koli içi varsayılan tasarım ekleyin.
-    </div>
+    <p class="text-muted">Henüz tasarım yok. <a asp-action="Create">İlk tasarımı oluşturun</a>.</p>
 }
 else
 {

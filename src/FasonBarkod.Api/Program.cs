@@ -19,14 +19,14 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Migration ve kullanıcı seed Web projesinde yapılır (aynı SQLite dosyası paylaşıldığı için).
+// Migration Web projesinde uygulanır (aynı veritabanı paylaşılır).
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+// İç ağda HTTP ile çalışır; sertifika / HTTPS gerekmez.
 app.UseMiddleware<ApiKeyMiddleware>();
 app.UseAuthorization();
 app.MapControllers();

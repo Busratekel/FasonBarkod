@@ -6,4 +6,9 @@ obj/
 *.db-shm
 *.db-wal
 **/PrintOutput/
+publish/
+CanliPaket/
+IisPaket/
+**/QzSigning/private-key.pem
+**/QzSigning/*.pfx
 appsettings.Development.json.user

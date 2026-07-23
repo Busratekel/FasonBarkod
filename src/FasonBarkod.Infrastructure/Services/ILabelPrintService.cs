@@ -22,10 +22,14 @@ public record SasLabelPrintContext(
     string? SerialNumber = null,
     string? PrinterName = null,
     string? TemplateFileName = null,
-    string? VendorCode = null);
+    string? VendorCode = null,
+    string? MaterialGroupDescription = null);
 
 public record LabelPrintResult(
     bool Success,
     int PrintedCount,
     string? ErrorMessage,
-    string? SimulatedOutputFolder = null);
+    string? SimulatedOutputFolder = null,
+    /// <summary>QZ Tray için üretilen SBPL içerikleri (sunucu yazıcıya göndermez).</summary>
+    IReadOnlyList<string>? RawJobs = null,
+    bool UseQzTray = false);

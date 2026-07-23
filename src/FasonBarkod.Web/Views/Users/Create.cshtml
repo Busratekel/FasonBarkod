@@ -1,0 +1,77 @@
+@model CreateUserViewModel
+@{
+    ViewData["Title"] = "Yeni Kullanıcı";
+    var roles = (ViewBag.Roles as string[]) ?? ["Admin", "Operator"];
+}
+
+<div class="mb-3">
+    <h1 class="h3 mb-1">Yeni Kullanıcı</h1>
+    <p class="text-muted mb-0">Admin veya operatör hesabı oluşturun.</p>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form asp-action="Create" method="post" class="row g-3" style="max-width: 520px;">
+            @Html.AntiForgeryToken()
+            <div asp-validation-summary="ModelOnly" class="alert alert-danger py-2"></div>
+
+            <div class="col-12">
+                <label asp-for="Email" class="form-label"></label>
+                <input asp-for="Email" class="form-control" autocomplete="username" />
+                <span asp-validation-for="Email" class="text-danger small"></span>
+            </div>
+
+            <div class="col-12">
+                <label asp-for="FullName" class="form-label"></label>
+                <input asp-for="FullName" class="form-control" />
+                <span asp-validation-for="FullName" class="text-danger small"></span>
+            </div>
+
+            <div class="col-12">
+                <label asp-for="VendorCode" class="form-label"></label>
+                <input asp-for="VendorCode" class="form-control" inputmode="numeric" autocomplete="off" />
+                <div class="form-text">Operatör için zorunlu. Admin için boş bırakılabilir.</div>
+                <span asp-validation-for="VendorCode" class="text-danger small"></span>
+            </div>
+
+            <div class="col-12">
+                <label asp-for="Role" class="form-label"></label>
+                <select asp-for="Role" class="form-select">
+                    @foreach (var role in roles)
+                    {
+                        <option value="@role">@(role == "Operator" ? "Operatör" : role)</option>
+                    }
+                </select>
+                <span asp-validation-for="Role" class="text-danger small"></span>
+            </div>
+
+            <div class="col-md-6">
+                <label asp-for="Password" class="form-label"></label>
+                <input asp-for="Password" class="form-control" autocomplete="new-password" />
+                <span asp-validation-for="Password" class="text-danger small"></span>
+            </div>
+
+            <div class="col-md-6">
+                <label asp-for="ConfirmPassword" class="form-label"></label>
+                <input asp-for="ConfirmPassword" class="form-control" autocomplete="new-password" />
+                <span asp-validation-for="ConfirmPassword" class="text-danger small"></span>
+            </div>
+
+            <div class="col-12">
+                <div class="form-check">
+                    <input asp-for="IsActive" class="form-check-input" />
+                    <label asp-for="IsActive" class="form-check-label"></label>
+                </div>
+            </div>
+
+            <div class="col-12 d-flex gap-2">
+                <button type="submit" class="btn btn-primary">Kaydet</button>
+                <a class="btn btn-outline-secondary" asp-action="Index">İptal</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="~/Views/Shared/_ValidationScriptsPartial.cshtml" />
+}

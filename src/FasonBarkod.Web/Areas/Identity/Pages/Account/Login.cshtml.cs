@@ -8,6 +8,7 @@ namespace FasonBarkod.Web.Areas.Identity.Pages.Account;
 
 public class LoginModel(
     SignInManager<ApplicationUser> signInManager,
+    UserManager<ApplicationUser> userManager,
     ILogger<LoginModel> logger) : PageModel
 {
     [BindProperty]
@@ -54,6 +55,16 @@ public class LoginModel(
 
         if (result.Succeeded)
         {
+            var user = await userManager.FindByEmailAsync(Input.Email)
+                       ?? await userManager.FindByNameAsync(Input.Email);
+            if (user is null || !user.IsActive)
+            {
+                await signInManager.SignOutAsync();
+                ModelState.AddModelError(string.Empty, "Bu hesap pasif. Yönetici ile iletişime geçin.");
+                ReturnUrl = returnUrl;
+                return Page();
+            }
+
             logger.LogInformation("Kullanıcı giriş yaptı: {User}", Input.Email);
             return LocalRedirect(returnUrl);
         }

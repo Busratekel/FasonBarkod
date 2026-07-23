@@ -9,6 +9,33 @@ namespace FasonBarkod.Api.Controllers;
 [Route("api/[controller]")]
 public class SasController(ISapService sapService) : ControllerBase
 {
+    [HttpGet("lines")]
+    public async Task<IActionResult> GetLinesByQuery(
+        [FromQuery] string? orderNo,
+        [FromQuery] string? vendorCode,
+        CancellationToken cancellationToken)
+    {
+        var result = await sapService.ListSasAsync(orderNo ?? string.Empty, vendorCode, cancellationToken);
+        if (result.Lines.Count == 0)
+        {
+            var sapMessage = result.SapMessages.Count > 0
+                ? string.Join(" | ", result.SapMessages)
+                : null;
+
+            return NotFound(new
+            {
+                error = string.IsNullOrWhiteSpace(orderNo)
+                    ? "SAS listesi boş. SAP bu cari/filtre ile kalem döndürmedi."
+                    : $"SAS bulunamadı: {orderNo}. SAP bağlantısı başarılı ancak ZMM_N_SAS_L bu numara/cari ile kalem döndürmedi.",
+                sapMessage,
+                hint = $"SE37: ZMM_N_SAS_L IS_EBELN={(string.IsNullOrWhiteSpace(orderNo) ? "(boş)" : orderNo)}, I_KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(10 boşluk)" : vendorCode)}",
+                diagnostic = $"http://localhost:5135/saphealth/sas-test?allowEmptyOrder=true&orderNo={Uri.EscapeDataString(orderNo ?? string.Empty)}&vendorCode={Uri.EscapeDataString(vendorCode ?? string.Empty)}"
+            });
+        }
+
+        return Ok(result.Lines);
+    }
+
     [HttpGet("{orderNo}/lines")]
     public async Task<IActionResult> GetLines(
         string orderNo,
@@ -17,20 +44,26 @@ public class SasController(ISapService sapService) : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(orderNo))
         {
-            return BadRequest(new { error = "SAS numarası zorunludur." });
+            return await GetLinesByQuery(null, vendorCode, cancellationToken);
         }
 
-        var lines = await sapService.ListSasAsync(orderNo, vendorCode, cancellationToken);
-        if (lines.Count == 0)
+        var result = await sapService.ListSasAsync(orderNo, vendorCode, cancellationToken);
+        if (result.Lines.Count == 0)
         {
+            var sapMessage = result.SapMessages.Count > 0
+                ? string.Join(" | ", result.SapMessages)
+                : null;
+
             return NotFound(new
             {
                 error = $"SAS bulunamadı: {orderNo}. SAP bağlantısı başarılı ancak ZMM_N_SAS_L bu numara/cari ile kalem döndürmedi.",
-                hint = $"SE37'de ZMM_N_SAS_L fonksiyonunu EBELN={orderNo} ve KUNNR/LIFNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(boş)" : vendorCode)} ile test edin. Test ortamı (client 100) bu SAS'ı içermiyor olabilir."
+                sapMessage,
+                hint = $"SE37'de ZMM_N_SAS_L (kullanıcı 170RFC, client 100): IS_EBELN.EBELN={orderNo}, I_KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(10 boşluk)" : vendorCode)}. SE37'de veri geliyorsa ekran görüntüsünü paylaşın; gelmiyorsa SAS/cari test ortamında yok veya yetki eksik.",
+                diagnostic = $"http://localhost:5135/saphealth/sas-test?orderNo={Uri.EscapeDataString(orderNo)}&vendorCode={Uri.EscapeDataString(vendorCode ?? string.Empty)}"
             });
         }
 
-        return Ok(lines);
+        return Ok(result.Lines);
     }
 
     [HttpPost("barcodes")]
@@ -45,7 +78,7 @@ public class SasController(ISapService sapService) : ControllerBase
 
         if (!PackageQuantityValidator.IsValidMultiple(request.PrintQuantity, request.PackageQuantity, request.LabelType))
         {
-            return BadRequest(new { error = PackageQuantityValidator.NotMultipleError });
+            return BadRequest(new { error = PackageQuantityValidator.GetValidationError(request.LabelType) });
         }
 
         var result = await sapService.CreateBarcodeAsync(new SapBarcodeRequest(

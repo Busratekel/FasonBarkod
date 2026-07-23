@@ -18,4 +18,9 @@ internal static class SapAccountNumber
 
     public static string? Pad10OrNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : Pad10(value);
+
+    /// <summary>
+    /// SAP CHAR alanları için boş değer — 10 boşluk.
+    /// </summary>
+    public static string Char10Spaces() => new(' ', 10);
 }

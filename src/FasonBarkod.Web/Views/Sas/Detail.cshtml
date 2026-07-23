@@ -2,13 +2,25 @@
 @{
     ViewData["Title"] = $"SAS {Model.PurchaseOrderNo}";
     var selected = Model.SelectedLine;
-    var isPrintTab = Model.ActiveTab != "reprint";
-    var koliUstuCount = selected is not null && Model.PackageQuantity > 0
-        ? (int)(Model.KoliUstuQuantity / Model.PackageQuantity)
-        : 0;
-    var koliIciCount = selected is not null && Model.KoliIciQuantity > 0
-        ? (int)Model.KoliIciQuantity
-        : 0;
+    var koliUstuValid = selected is not null && Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0
+        && Model.KoliUstuQuantity % Model.PackageQuantity == 0;
+    var koliUstuCount = koliUstuValid ? (int)(Model.KoliUstuQuantity / Model.PackageQuantity) : 0;
+    var koliIciValid = selected is not null && Model.PackageQuantity > 0 && Model.KoliIciQuantity > 0
+        && Model.KoliIciQuantity == Model.PackageQuantity;
+    var koliIciCount = koliIciValid ? (int)Model.KoliIciQuantity : 0;
+    // SAP kuralı: koli içi için Basılan Koli > 0 ve kalan hak > 0 olmalı.
+    // Kalan ≈ (Basılan Koli × Paket) − Basılan Koli İçi
+    var koliUstuPrinted = selected is not null && selected.PrintedBoxCount > 0;
+    var koliIciRemaining = selected is null
+        ? 0
+        : Math.Max(0, (int)(selected.PrintedBoxCount * selected.PackageQuantity) - selected.PrintedInsideBoxCount);
+    var canPrintKoliIci = koliUstuPrinted && koliIciRemaining > 0;
+    // Yeniden basım: bu kalemde SAP veya yerel geçmişte basılmış etiket olmalı.
+    var canReprint = selected is not null && (
+        selected.PrintedBoxCount > 0
+        || selected.PrintedInsideBoxCount > 0
+        || Model.RecentPrints.Any(p => p.SapSent || p.Status == FasonBarkod.Core.Enums.BarcodePrintStatus.Printed));
+    var isPrintTab = Model.ActiveTab != "reprint" || !canReprint;
 }
 
 <nav aria-label="breadcrumb" class="mb-3">    <ol class="breadcrumb">
@@ -35,17 +47,32 @@
     <a class="btn btn-outline-secondary btn-sm" asp-action="Index">Yeni arama</a>
 </div>
 
-<div class="table-responsive mb-3">
-    <table class="table table-bordered table-hover align-middle sas-lines-table">
+<div class="d-flex justify-content-between align-items-center mb-2 sas-lines-toolbar">
+    <span class="text-muted small" id="sasLinesSummary"></span>
+    <div class="d-flex align-items-center gap-2">
+        <label for="sasLinesPageSize" class="text-muted small mb-0">Sayfa başına</label>
+        <select id="sasLinesPageSize" class="form-select form-select-sm" style="width: auto;">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="0">Tümü</option>
+        </select>
+    </div>
+</div>
+
+<div class="table-responsive mb-2">
+    <table class="table table-bordered table-hover align-middle sas-lines-table" id="sasLinesTable">
         <thead class="table-light">
             <tr>
-                <th>Kalem No</th>
-                <th>Malzeme Kodu</th>
-                <th>Malzeme Açıklaması</th>
+                <th class="sas-sortable" data-sort-key="lineNo" data-sort-type="number">Kalem No <span class="sas-sort-indicator"></span></th>
+                <th class="sas-sortable" data-sort-key="materialNumber" data-sort-type="text">Malzeme Kodu <span class="sas-sort-indicator"></span></th>
+                <th class="sas-sortable" data-sort-key="materialDescription" data-sort-type="text">Malzeme Açıklaması <span class="sas-sort-indicator"></span></th>
                 <th>Birim</th>
-                <th class="text-end">Miktar</th>
-                <th class="text-end">Paket Miktarı</th>
-                <th class="text-end">Basılan Koli</th>
+                <th class="text-end sas-sortable" data-sort-key="quantity" data-sort-type="number">Miktar <span class="sas-sort-indicator"></span></th>
+                <th class="text-end sas-sortable" data-sort-key="packageQuantity" data-sort-type="number">Paket Miktarı <span class="sas-sort-indicator"></span></th>
+                <th class="text-end sas-sortable" data-sort-key="printedBoxCount" data-sort-type="number">Basılan Koli <span class="sas-sort-indicator"></span></th>
+                <th class="text-end sas-sortable" data-sort-key="printedInsideBoxCount" data-sort-type="number">Basılan Koli İçi <span class="sas-sort-indicator"></span></th>
                 <th>Cari</th>
                 <th></th>
             </tr>
@@ -54,7 +81,15 @@
         @foreach (var line in Model.Lines)
         {
             var isSelected = line.LineNo == Model.SelectedLineNo;
-            <tr class="@(isSelected ? "table-warning" : null)">
+            var lineNoSortValue = int.TryParse(line.LineNo, out var parsedLineNo) ? parsedLineNo : int.MaxValue;
+            <tr class="@(isSelected ? "table-warning" : null)"
+                data-line-no="@lineNoSortValue"
+                data-material-number="@line.MaterialNumber"
+                data-material-description="@line.MaterialDescription"
+                data-quantity="@line.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                data-package-quantity="@line.PackageQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                data-printed-box-count="@line.PrintedBoxCount"
+                data-printed-inside-box-count="@line.PrintedInsideBoxCount">
                 <td>@line.LineNo</td>
                 <td>@line.MaterialNumber</td>
                 <td>@line.MaterialDescription</td>
@@ -62,11 +97,14 @@
                 <td class="text-end">@line.Quantity.ToString("N0")</td>
                 <td class="text-end">@line.PackageQuantity.ToString("N0")</td>
                 <td class="text-end">@line.PrintedBoxCount</td>
+                <td class="text-end">@line.PrintedInsideBoxCount</td>
                 <td>
                     @{
                         var cariDisplay = !string.IsNullOrWhiteSpace(line.CustomerName)
                             ? line.CustomerName
-                            : line.VendorCode;
+                            : !string.IsNullOrWhiteSpace(line.VendorCode)
+                                ? line.VendorCode
+                                : Model.VendorCode;
                     }
                     @(string.IsNullOrWhiteSpace(cariDisplay) ? "—" : cariDisplay)
                 </td>
@@ -85,6 +123,12 @@
         </tbody>
     </table>
 </div>
+
+<nav class="d-flex justify-content-between align-items-center mb-3 sas-lines-pager" id="sasLinesPager">
+    <button type="button" class="btn btn-outline-secondary btn-sm" id="sasLinesPrev">‹ Önceki</button>
+    <span class="text-muted small" id="sasLinesPageIndicator"></span>
+    <button type="button" class="btn btn-outline-secondary btn-sm" id="sasLinesNext">Sonraki ›</button>
+</nav>
 
 <div class="row g-3 sas-print-panel align-items-start">
     <div class="col-lg-5 d-flex flex-column gap-3">
@@ -130,6 +174,13 @@
                         <dd class="col-sm-7">@selected.Quantity.ToString("N0") @selected.Unit</dd>
                         <dt class="col-sm-5">Basılan Koli</dt>
                         <dd class="col-sm-7">@selected.PrintedBoxCount</dd>
+                        <dt class="col-sm-5">Basılan Koli İçi</dt>
+                        <dd class="col-sm-7">@selected.PrintedInsideBoxCount</dd>
+                        <dt class="col-sm-5">Kalan Koli İçi</dt>
+                        <dd class="col-sm-7">
+                            <strong>@koliIciRemaining</strong>
+                            <span class="text-muted small">(koli × paket − basılan koli içi)</span>
+                        </dd>
                     </dl>
                 }
             </div>
@@ -160,7 +211,8 @@
                     </li>
                     <li class="nav-item">
                         <button class="nav-link @(!isPrintTab ? "active" : "")" data-bs-toggle="tab" data-bs-target="#yeniden-etiket-yazdir" type="button"
-                                @(selected is null ? "disabled" : null)>YENİDEN ETİKET YAZDIR</button>
+                                title="@(canReprint ? null : "Bu kalemde henüz basılmış etiket yok.")"
+                                disabled="@(!canReprint)">YENİDEN ETİKET YAZDIR</button>
                     </li>
                 </ul>
             </div>
@@ -183,7 +235,6 @@
                                     <input asp-for="PackageQuantity" class="form-control sas-package-qty" id="packageQtyDisplay" readonly
                                            data-val="false" step="any" />
                                 </div>
-                                <div class="form-text">SAP'ten otomatik gelir (PAKET_MIKTARI). Normalde değiştirmeyin.</div>
                             </div>
                         </div>
 
@@ -199,16 +250,19 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <label asp-for="KoliUstuQuantity" class="form-label"></label>
-                                    <input asp-for="KoliUstuQuantity" class="form-control mb-2" data-val="false" step="any" min="0.0001" />
-                                    @if (koliUstuCount > 0)
-                                    {
-                                        <div class="form-text mb-2">→ @koliUstuCount adet koli üstü etiketi basılır</div>
-                                    }
-                                    else if (Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0)
-                                    {
-                                        <div class="form-text text-danger mb-2">Paket miktarının katı olmalıdır.</div>
-                                    }
-                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn">Koli Üstü Barkodu</button>
+                                    <input asp-for="KoliUstuQuantity" id="koliUstuQtyInput" class="form-control mb-2" data-val="false" step="any" min="0.0001"
+                                           data-qty-rule="multiple" />
+                                    <div id="koliUstuFeedback" class="form-text mb-2">
+                                        @if (koliUstuCount > 0)
+                                        {
+                                            <text>→ @koliUstuCount adet koli üstü etiketi basılır</text>
+                                        }
+                                        else if (Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0)
+                                        {
+                                            <span class="text-danger">Paket miktarının katı olmalıdır.</span>
+                                        }
+                                    </div>
+                                    <button type="submit" id="koliUstuSubmitBtn" class="btn btn-warning w-100 sas-submit-btn">Koli Üstü Barkodu</button>
                                 </form>
                             </div>
                             <div class="col-md-4 d-flex flex-column justify-content-end">
@@ -226,12 +280,32 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <label asp-for="KoliIciQuantity" class="form-label"></label>
-                                    <input asp-for="KoliIciQuantity" class="form-control mb-2" data-val="false" step="any" min="0.0001" />
-                                    @if (koliIciCount > 0)
-                                    {
-                                        <div class="form-text mb-2">→ @koliIciCount adet koli içi etiketi basılır</div>
-                                    }
-                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn">Koli İçi Barkodu</button>
+                                    <input asp-for="KoliIciQuantity" id="koliIciQtyInput" class="form-control mb-2" data-val="false" step="any" min="0.0001"
+                                           data-qty-rule="equal" data-blocked="@(!canPrintKoliIci ? "true" : "false")" disabled="@(!canPrintKoliIci)" />
+                                    <div id="koliIciFeedback" class="form-text mb-2">
+                                        @if (!koliUstuPrinted)
+                                        {
+                                            <span class="text-danger">Bu kalem için önce <strong>Koli Üstü</strong> barkodu basılmalı (SAP: Basılan Koli = 0 iken koli içi barkodu üretilemiyor).</span>
+                                        }
+                                        else if (koliIciRemaining <= 0)
+                                        {
+                                            <span class="text-danger">
+                                                Bu kalemde koli içi hakkı kalmamış (SAP Max: 0).
+                                                Basılan koli: <strong>@selected!.PrintedBoxCount</strong>,
+                                                basılan koli içi: <strong>@selected.PrintedInsideBoxCount</strong>.
+                                                Yeni koli için önce <strong>Koli Üstü</strong> basın veya <strong>Yeniden Etiket Yazdır</strong> kullanın.
+                                            </span>
+                                        }
+                                        else if (koliIciCount > 0)
+                                        {
+                                            <text>→ @koliIciCount adet koli içi etiketi basılır (kalan hak: @koliIciRemaining)</text>
+                                        }
+                                        else if (Model.PackageQuantity > 0 && Model.KoliIciQuantity > 0)
+                                        {
+                                            <span class="text-danger">Koli içi basım adedi paket miktarına (@Model.PackageQuantity.ToString("0.####")) eşit olmalıdır.</span>
+                                        }
+                                    </div>
+                                    <button type="submit" id="koliIciSubmitBtn" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canPrintKoliIci)">Koli İçi Barkodu</button>
                                 </form>
                             </div>
                         </div>
@@ -243,18 +317,24 @@
                     {
                         <p class="text-muted mb-0">Kalem seçilmedi.</p>
                     }
+                    else if (!canReprint)
+                    {
+                        <p class="text-muted mb-0">Bu kalemde henüz basılmış etiket yok. Önce <strong>Etiket Yazdır</strong> ile basım yapın.</p>
+                    }
                     else
                     {
                         <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
 
                         <p class="text-muted small">
-                            Daha önce basılmış bir etiketi seri numarası (SERNR) ile tekrar yazdırın.
+                            Yırtılan / okunmayan etiketi <strong>aynı SERNR</strong> ile yeniden basar.
+                            Yeni barkod üretmez; SAP hakkı (Max) tüketmez. Bu yüzden Max: 0 iken de kullanılabilir.
                         </p>
 
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label asp-for="SerialNumber" class="form-label"></label>
                                 <input asp-for="SerialNumber" id="serialNumberInput" class="form-control" data-val="false" placeholder="Örn. 0000000123456789" />
+                                <div class="form-text">Kalemin son basımından otomatik doldurulur; listeden de seçebilirsiniz.</div>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Paket Miktar</label>
@@ -274,7 +354,7 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
-                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn">Koli Üstü Tekrar Bas</button>
+                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli Üstü Tekrar Bas</button>
                                 </form>
                             </div>
                             <div class="col-md-6">
@@ -288,7 +368,7 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
-                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn">Koli İçi Tekrar Bas</button>
+                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli İçi Tekrar Bas</button>
                                 </form>
                             </div>
                         </div>
@@ -324,10 +404,20 @@
                     {
                         var statusLabel = print.Status switch
                         {
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Pending => "Bekliyor",
                             FasonBarkod.Core.Enums.BarcodePrintStatus.Printed => "Basıldı",
                             FasonBarkod.Core.Enums.BarcodePrintStatus.SentToSap => "SAP",
                             FasonBarkod.Core.Enums.BarcodePrintStatus.Failed => "Hata",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Cancelled => "İptal",
                             _ => print.Status.ToString()
+                        };
+                        var statusCss = print.Status switch
+                        {
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Printed => "success",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.SentToSap => "success",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Failed => "danger",
+                            FasonBarkod.Core.Enums.BarcodePrintStatus.Pending => "warning",
+                            _ => "secondary"
                         };
                         <tr>
                             <td class="fw-semibold">@print.BarcodeNo</td>
@@ -335,8 +425,26 @@
                             <td class="text-end">@print.Quantity.ToString("N0")</td>
                             <td>@print.PrintDate.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
                             <td>@(print.PrintedBy ?? "-")</td>
-                            <td><span class="badge text-bg-success">@statusLabel</span></td>
+                            <td>
+                                <span class="badge text-bg-@statusCss">@statusLabel</span>
+                                @if (!print.SapSent)
+                                {
+                                    <span class="badge text-bg-secondary" title="SAP'e barkod isteği başarısız oldu; yerel/mock numara ile basıldı.">SAP'e gönderilmedi</span>
+                                }
+                            </td>
                             <td class="text-end">
+                                @{
+                                    var reprintSernr = !string.IsNullOrWhiteSpace(print.SerialNumber)
+                                        ? print.SerialNumber
+                                        : print.BarcodeNo;
+                                }
+                                <a class="btn btn-sm btn-outline-warning"
+                                   asp-action="Detail"
+                                   asp-route-id="@Model.PurchaseOrderNo"
+                                   asp-route-vendorCode="@Model.VendorCode"
+                                   asp-route-lineNo="@(print.LineNo ?? Model.LineNo)"
+                                   asp-route-tab="reprint"
+                                   asp-route-sernr="@reprintSernr">Tekrar bas</a>
                                 <a class="btn btn-sm btn-outline-secondary" asp-controller="BarcodePrints" asp-action="Detail" asp-route-id="@print.Id">Detay</a>
                             </td>
                         </tr>
@@ -374,6 +482,66 @@ else if (selected is not null)
                 serialFields().forEach(f => f.value = serialInput.value);
             }
 
+            // Koli Üstü: basım adedi paket miktarının katı olmalı. Koli İçi: basım adedi paket
+            // miktarına eşit olmalı (koli içindeki her ürün için bir etiket). Kullanıcı yazarken
+            // anında doğrulanır — geçersizse buton devre dışı kalır, sunucuya hiç gitmez.
+            function validateQtyInput(input, feedbackEl, submitBtn, rule) {
+                if (!input || !feedbackEl) return;
+
+                const blocked = (input.getAttribute('data-blocked') || '').toLowerCase() === 'true';
+                if (blocked) {
+                    if (submitBtn) submitBtn.disabled = true;
+                    return;
+                }
+
+                const pkg = parseFloat(packageInput ? packageInput.value : '0') || 0;
+                const qty = parseFloat(input.value) || 0;
+                let valid = false;
+                let count = 0;
+
+                if (pkg > 0 && qty > 0) {
+                    if (rule === 'multiple') {
+                        valid = Math.abs(qty % pkg) < 1e-9;
+                        if (valid) count = Math.round(qty / pkg);
+                    } else if (rule === 'equal') {
+                        valid = Math.abs(qty - pkg) < 1e-9;
+                        if (valid) count = Math.round(qty);
+                    }
+                }
+
+                if (qty <= 0 || pkg <= 0) {
+                    feedbackEl.innerHTML = '';
+                } else if (valid) {
+                    const label = rule === 'multiple' ? 'koli üstü' : 'koli içi';
+                    feedbackEl.innerHTML = '→ ' + count + ' adet ' + label + ' etiketi basılır';
+                } else {
+                    const msg = rule === 'multiple'
+                        ? 'Paket miktarının katı olmalıdır.'
+                        : 'Koli içi basım adedi paket miktarına (' + pkg + ') eşit olmalıdır.';
+                    feedbackEl.innerHTML = '<span class="text-danger">' + msg + '</span>';
+                }
+
+                if (submitBtn) {
+                    // Geçerli miktar yoksa veya koli üstü şartı yoksa buton kapalı kalsın.
+                    submitBtn.disabled = !(qty > 0 && pkg > 0 && valid);
+                }
+            }
+
+            function wireQtyValidation(inputId, feedbackId, submitBtnId) {
+                const input = document.getElementById(inputId);
+                const feedbackEl = document.getElementById(feedbackId);
+                const submitBtn = document.getElementById(submitBtnId);
+                if (!input) return;
+
+                const rule = input.getAttribute('data-qty-rule');
+                const run = () => validateQtyInput(input, feedbackEl, submitBtn, rule);
+                input.addEventListener('input', run);
+                if (packageInput) packageInput.addEventListener('input', run);
+            }
+
+            wireQtyValidation('koliUstuQtyInput', 'koliUstuFeedback', 'koliUstuSubmitBtn');
+            wireQtyValidation('koliIciQtyInput', 'koliIciFeedback', 'koliIciSubmitBtn');
+
             if (toggleBtn && packageInput) {
                 toggleBtn.addEventListener('click', function () {
                     const editing = packageInput.readOnly;
@@ -388,7 +556,26 @@ else if (selected is not null)
             }
 
             document.querySelectorAll('.sas-print-form, .sas-reprint-form').forEach(function (form) {
-                form.addEventListener('submit', function () {
+                form.addEventListener('submit', function (e) {
+                    const qtyInput = form.querySelector('[data-qty-rule]');
+                    if (qtyInput) {
+                        const blocked = (qtyInput.getAttribute('data-blocked') || '').toLowerCase() === 'true';
+                        if (blocked) {
+                            e.preventDefault();
+                            return;
+                        }
+                        const pkg = parseFloat(packageInput ? packageInput.value : '0') || 0;
+                        const qty = parseFloat(qtyInput.value) || 0;
+                        const rule = qtyInput.getAttribute('data-qty-rule');
+                        const valid = rule === 'multiple'
+                            ? (pkg > 0 && qty > 0 && qty % pkg === 0)
+                            : (pkg > 0 && qty > 0 && qty === pkg);
+                        if (!valid) {
+                            e.preventDefault();
+                            return;
+                        }
+                    }
+
                     syncPackageQty();
                     syncSerialNumber();
                     const btn = form.querySelector('.sas-submit-btn') || form.querySelector('button[type="submit"]');
@@ -401,6 +588,156 @@ else if (selected is not null)
 
             const feedback = document.getElementById('print-feedback');
             if (feedback) feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        })();
+
+        (function () {
+            const table = document.getElementById('sasLinesTable');
+            if (!table) return;
+
+            const tbody = table.querySelector('tbody');
+            const allRows = Array.from(tbody.querySelectorAll('tr'));
+            const pageSizeSelect = document.getElementById('sasLinesPageSize');
+            const prevBtn = document.getElementById('sasLinesPrev');
+            const nextBtn = document.getElementById('sasLinesNext');
+            const pageIndicator = document.getElementById('sasLinesPageIndicator');
+            const summary = document.getElementById('sasLinesSummary');
+            const pager = document.getElementById('sasLinesPager');
+
+            const dataKeyByColumn = {
+                lineNo: 'lineNo',
+                materialNumber: 'materialNumber',
+                materialDescription: 'materialDescription',
+                quantity: 'quantity',
+                packageQuantity: 'packageQuantity',
+                printedBoxCount: 'printedBoxCount',
+                printedInsideBoxCount: 'printedInsideBoxCount'
+            };
+
+            let sortKey = 'lineNo';
+            let sortType = 'number';
+            let sortAsc = true;
+            let currentPage = 1;
+            let pageSize = parseInt(pageSizeSelect ? pageSizeSelect.value : '20', 10) || 20;
+
+            function rowValue(row, key) {
+                const attr = 'data-' + key.replace(/([A-Z])/g, '-$1').toLowerCase();
+                return row.getAttribute(attr) ?? '';
+            }
+
+            function sortRows() {
+                allRows.sort(function (a, b) {
+                    const va = rowValue(a, dataKeyByColumn[sortKey]);
+                    const vb = rowValue(b, dataKeyByColumn[sortKey]);
+                    let cmp;
+                    if (sortType === 'number') {
+                        cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0);
+                    } else {
+                        cmp = va.localeCompare(vb, 'tr', { sensitivity: 'base' });
+                    }
+                    return sortAsc ? cmp : -cmp;
+                });
+            }
+
+            function updateSortIndicators() {
+                table.querySelectorAll('th.sas-sortable').forEach(function (th) {
+                    const indicator = th.querySelector('.sas-sort-indicator');
+                    if (!indicator) return;
+                    if (th.getAttribute('data-sort-key') === sortKey) {
+                        indicator.textContent = sortAsc ? '▲' : '▼';
+                    } else {
+                        indicator.textContent = '';
+                    }
+                });
+            }
+
+            function render() {
+                sortRows();
+                updateSortIndicators();
+
+                const total = allRows.length;
+                const effectivePageSize = pageSize > 0 ? pageSize : total;
+                const totalPages = effectivePageSize > 0 ? Math.max(1, Math.ceil(total / effectivePageSize)) : 1;
+                if (currentPage > totalPages) currentPage = totalPages;
+                if (currentPage < 1) currentPage = 1;
+
+                const start = pageSize > 0 ? (currentPage - 1) * pageSize : 0;
+                const end = pageSize > 0 ? start + pageSize : total;
+
+                tbody.innerHTML = '';
+                allRows.forEach(function (row, index) {
+                    if (index >= start && index < end) {
+                        tbody.appendChild(row);
+                    }
+                });
+
+                if (summary) {
+                    summary.textContent = total === 0
+                        ? 'Kalem yok'
+                        : `${total} kalemden ${Math.min(start + 1, total)}–${Math.min(end, total)} arası gösteriliyor`;
+                }
+
+                if (pageIndicator) {
+                    pageIndicator.textContent = `Sayfa ${currentPage} / ${totalPages}`;
+                }
+
+                if (prevBtn) prevBtn.disabled = currentPage <= 1;
+                if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
+                if (pager) pager.style.display = (pageSize > 0 && totalPages > 1) ? '' : 'none';
+            }
+
+            function goToSelectedPage() {
+                sortRows();
+                const selectedIdx = allRows.findIndex(function (row) {
+                    return row.classList.contains('table-warning');
+                });
+                if (selectedIdx < 0 || pageSize <= 0) {
+                    currentPage = 1;
+                    return;
+                }
+                currentPage = Math.floor(selectedIdx / pageSize) + 1;
+            }
+
+            table.querySelectorAll('th.sas-sortable').forEach(function (th) {
+                th.style.cursor = 'pointer';
+                th.addEventListener('click', function () {
+                    const key = th.getAttribute('data-sort-key');
+                    const type = th.getAttribute('data-sort-type') || 'text';
+                    if (sortKey === key) {
+                        sortAsc = !sortAsc;
+                    } else {
+                        sortKey = key;
+                        sortType = type;
+                        sortAsc = true;
+                    }
+                    goToSelectedPage();
+                    render();
+                });
+            });
+
+            if (pageSizeSelect) {
+                pageSizeSelect.addEventListener('change', function () {
+                    pageSize = parseInt(pageSizeSelect.value, 10) || 0;
+                    goToSelectedPage();
+                    render();
+                });
+            }
+
+            if (prevBtn) {
+                prevBtn.addEventListener('click', function () {
+                    currentPage -= 1;
+                    render();
+                });
+            }
+
+            if (nextBtn) {
+                nextBtn.addEventListener('click', function () {
+                    currentPage += 1;
+                    render();
+                });
+            }
+
+            goToSelectedPage();
+            render();
         })();
     </script>
 }
