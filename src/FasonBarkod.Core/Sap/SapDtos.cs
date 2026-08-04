@@ -59,3 +59,18 @@ public record SapReprintRequest(
     LabelType LabelType,
     string SerialNumber,
     string? VendorCode = null);
+
+/// <summary>ZMMIST14000 — GetSAPSASBarcodeSerials satırı.</summary>
+public record SasSerialDto(
+    string PurchaseOrderNo,
+    string LineNo,
+    string SerialNumber,
+    decimal Quantity,
+    string Unit,
+    string Status,
+    string BoxFlag);
+
+public record SasSerialListResult(
+    bool Success,
+    string? ErrorMessage,
+    IReadOnlyList<SasSerialDto> Serials);

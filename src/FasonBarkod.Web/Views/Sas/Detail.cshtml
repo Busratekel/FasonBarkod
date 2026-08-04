@@ -1,24 +1,38 @@
 @model SasDetailViewModel
+@using FasonBarkod.Core.Sap
 @{
     ViewData["Title"] = $"SAS {Model.PurchaseOrderNo}";
     var selected = Model.SelectedLine;
-    var koliUstuValid = selected is not null && Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0
-        && Model.KoliUstuQuantity % Model.PackageQuantity == 0;
-    var koliUstuCount = koliUstuValid ? (int)(Model.KoliUstuQuantity / Model.PackageQuantity) : 0;
-    var koliIciValid = selected is not null && Model.PackageQuantity > 0 && Model.KoliIciQuantity > 0
-        && Model.KoliIciQuantity == Model.PackageQuantity;
+    var isAdmin = User.IsInRole("Admin");
+    var orderQty = Model.OrderQuantity > 0 ? Model.OrderQuantity : (selected?.Quantity ?? 0);
+    var originalPkg = Model.OriginalPackageQuantity > 0
+        ? Model.OriginalPackageQuantity
+        : (selected?.PackageQuantity ?? 0);
+    var pkg = Model.PackageQuantity;
+    var printedBox = selected?.PrintedBoxCount ?? 0;
+    var printedInside = selected?.PrintedInsideBoxCount ?? 0;
+    // Koli içi kota hesabında paket>MENGE ise efektif paket = MENGE (SAP'ye de böyle gider).
+    var pkgForInside = orderQty > 0 && pkg > orderQty ? orderQty : pkg;
+    var remainingInside = PackageQuantityValidator.RemainingInsideQuantity(
+        orderQty, pkgForInside, printedBox, printedInside);
+    var packageExceedsOrder = orderQty > 0 && pkg > orderQty;
+    var koliIciBlocked = remainingInside is 0;
+    var koliUstuValid = selected is not null && pkg > 0 && Model.KoliUstuQuantity > 0
+        && Model.KoliUstuQuantity % pkg == 0
+        && (orderQty <= 0 || Model.KoliUstuQuantity <= orderQty)
+        && (originalPkg <= 0 || pkg <= originalPkg)
+        && !packageExceedsOrder;
+    var koliUstuCount = koliUstuValid ? (int)(Model.KoliUstuQuantity / pkg) : 0;
+    // Koli içi: adet ≥ 1, paket dolu, SAP kalan kota > 0.
+    var koliIciValid = selected is not null && pkg > 0 && Model.KoliIciQuantity >= 1
+        && (originalPkg <= 0 || pkg <= originalPkg)
+        && !koliIciBlocked
+        && (remainingInside is null || Model.KoliIciQuantity <= remainingInside.Value);
     var koliIciCount = koliIciValid ? (int)Model.KoliIciQuantity : 0;
-    // SAP kuralı: koli içi için Basılan Koli > 0 ve kalan hak > 0 olmalı.
-    // Kalan ≈ (Basılan Koli × Paket) − Basılan Koli İçi
-    var koliUstuPrinted = selected is not null && selected.PrintedBoxCount > 0;
-    var koliIciRemaining = selected is null
-        ? 0
-        : Math.Max(0, (int)(selected.PrintedBoxCount * selected.PackageQuantity) - selected.PrintedInsideBoxCount);
-    var canPrintKoliIci = koliUstuPrinted && koliIciRemaining > 0;
-    // Yeniden basım: bu kalemde SAP veya yerel geçmişte basılmış etiket olmalı.
     var canReprint = selected is not null && (
         selected.PrintedBoxCount > 0
         || selected.PrintedInsideBoxCount > 0
+        || Model.SapSerialsCount > 0
         || Model.RecentPrints.Any(p => p.SapSent || p.Status == FasonBarkod.Core.Enums.BarcodePrintStatus.Printed));
     var isPrintTab = Model.ActiveTab != "reprint" || !canReprint;
 }
@@ -172,14 +186,32 @@
                         <dd class="col-sm-7">@selected.MaterialDescription</dd>
                         <dt class="col-sm-5">Miktar</dt>
                         <dd class="col-sm-7">@selected.Quantity.ToString("N0") @selected.Unit</dd>
+                        <dt class="col-sm-5">Paket Miktarı</dt>
+                        <dd class="col-sm-7">@selected.PackageQuantity.ToString("N0")</dd>
                         <dt class="col-sm-5">Basılan Koli</dt>
                         <dd class="col-sm-7">@selected.PrintedBoxCount</dd>
                         <dt class="col-sm-5">Basılan Koli İçi</dt>
                         <dd class="col-sm-7">@selected.PrintedInsideBoxCount</dd>
-                        <dt class="col-sm-5">Kalan Koli İçi</dt>
+                        <dt class="col-sm-5">Koli üstü üst sınır</dt>
                         <dd class="col-sm-7">
-                            <strong>@koliIciRemaining</strong>
-                            <span class="text-muted small">(koli × paket − basılan koli içi)</span>
+                            <strong>@selected.Quantity.ToString("N0")</strong>
+                            <span class="text-muted small">(MENGE — basılacak ≤ bu, paket katı)</span>
+                        </dd>
+                        <dt class="col-sm-5">Koli içi kalan</dt>
+                        <dd class="col-sm-7">
+                            @if (remainingInside is null)
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                            else if (remainingInside == 0)
+                            {
+                                <strong class="text-danger">0</strong>
+                                <span class="text-muted small">(basılamaz)</span>
+                            }
+                            else
+                            {
+                                <strong>@remainingInside.Value.ToString("N0")</strong>
+                            }
                         </dd>
                     </dl>
                 }
@@ -193,7 +225,7 @@
                 <ul class="mb-0 ps-3">
                     <li><strong>Paket miktarı:</strong> SAP'ten otomatik gelir; normalde değiştirmeyin. İstisna durumda "Düzenle" ile açılır.</li>
                     <li><strong>Koli üstü:</strong> Girilen miktar paket miktarının tam katı olmalıdır. Örn. paket 10, miktar 10 → <strong>1</strong> koli üstü etiketi (KOLİ 10 ADET).</li>
-                    <li><strong>Koli içi:</strong> Girilen miktar kadar bağımsız etiket basılır. Örn. paket 10, miktar 10 → <strong>10</strong> koli içi etiketi.</li>
+                    <li><strong>Koli içi:</strong> Girilen miktar kadar bağımsız etiket basılır. SAP “Max: 0” derse bu kalemde kalan koli içi kotası yoktur (çoğu zaman sipariş miktarı koli üstü ile dolmuştur).</li>
                     <li><strong>Örnek (sipariş 25, paket 10):</strong> Koli üstü için <strong>20</strong> girin → 2 tam koli etiketi. Kalan 5 adet için <strong>koli içi</strong> alanına <strong>25</strong> (veya sadece 5) girerek ürün etiketlerini basın.</li>
                     <li><strong>Butonlar:</strong> SAP'ten barkod alır, .prn şablonu doldurur ve SATO yazıcıya gönderir.</li>
                 </ul>
@@ -226,15 +258,44 @@
                     {
                         <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
 
-                        <input type="hidden" id="sapPackageQuantity" value="@Model.PackageQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <input type="hidden" id="sapOriginalPackageQuantity" value="@originalPkg.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <input type="hidden" id="sapOrderQuantity" value="@orderQty.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <input type="hidden" id="sapPrintedBoxCount" value="@printedBox.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <input type="hidden" id="sapPrintedInsideCount" value="@printedInside.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <input type="hidden" id="sapRemainingInside" value="@(remainingInside?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")" />
 
                         <div class="row g-3 align-items-end mb-3">
                             <div class="col-md-5">
                                 <label asp-for="PackageQuantity" class="form-label"></label>
                                 <div class="input-group">
-                                    <input asp-for="PackageQuantity" class="form-control sas-package-qty" id="packageQtyDisplay" readonly
-                                           data-val="false" step="any" />
+                                    @if (isAdmin)
+                                    {
+                                        <input asp-for="PackageQuantity" class="form-control sas-package-qty" id="packageQtyDisplay"
+                                               data-val="false" step="any" min="0.0001" />
+                                        <button type="button" class="btn btn-outline-secondary" id="resetPackageQty" title="SAP paket miktarına dön">SAP</button>
+                                    }
+                                    else
+                                    {
+                                        <input asp-for="PackageQuantity" class="form-control sas-package-qty" id="packageQtyDisplay"
+                                               data-val="false" step="any" min="0.0001" readonly tabindex="-1" />
+                                    }
                                 </div>
+                                <div class="form-text">
+                                    @if (isAdmin)
+                                    {
+                                        <text>En fazla SAP paket: <strong>@originalPkg.ToString("N0")</strong> (daha büyük olamaz; düşürülebilir). Düzenlediğiniz değer basımda SAP’ye gider.</text>
+                                    }
+                                    else
+                                    {
+                                        <text>Paket miktarını değiştiremezsiniz. Değişiklik için amirinize söyleyin.</text>
+                                    }
+                                    @if (packageExceedsOrder && isAdmin)
+                                    {
+                                        <span class="text-danger d-block">Sipariş @orderQty.ToString("N0"), paket @pkg.ToString("N0") — paketi @orderQty.ToString("N0") veya altına düşürün.</span>
+                                    }
+                                </div>
+                                <input type="hidden" asp-for="OriginalPackageQuantity" />
+                                <input type="hidden" asp-for="OrderQuantity" />
                             </div>
                         </div>
 
@@ -248,27 +309,34 @@
                                     <input type="hidden" asp-for="LineNo" />
                                     <input type="hidden" asp-for="MaterialNumber" />
                                     <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="OriginalPackageQuantity" />
+                                    <input type="hidden" asp-for="OrderQuantity" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <label asp-for="KoliUstuQuantity" class="form-label"></label>
                                     <input asp-for="KoliUstuQuantity" id="koliUstuQtyInput" class="form-control mb-2" data-val="false" step="any" min="0.0001"
-                                           data-qty-rule="multiple" />
+                                           data-qty-rule="box-top" />
                                     <div id="koliUstuFeedback" class="form-text mb-2">
-                                        @if (koliUstuCount > 0)
+                                        @if (koliUstuValid)
                                         {
-                                            <text>→ @koliUstuCount adet koli üstü etiketi basılır</text>
+                                            <text>→ @koliUstuCount Adet koli üstü etiketi (örn. paket 10, miktar 10 → 1 etiket)</text>
                                         }
-                                        else if (Model.PackageQuantity > 0 && Model.KoliUstuQuantity > 0)
+                                        else if (pkg > 0 && Model.KoliUstuQuantity > 0 && Model.KoliUstuQuantity % pkg != 0)
                                         {
-                                            <span class="text-danger">Paket miktarının katı olmalıdır.</span>
+                                            <span class="text-danger">Girilen Değer, Paket Miktarının Katı Olmalıdır.!</span>
+                                        }
+                                        else if (orderQty > 0 && Model.KoliUstuQuantity > orderQty)
+                                        {
+                                            <span class="text-danger">Sipariş miktarını (@orderQty.ToString("N0")) aşamaz.</span>
+                                        }
+                                        else if (orderQty > 0 && pkg > orderQty)
+                                        {
+                                            <span class="text-muted">Miktar @orderQty.ToString("N0") &lt; paket @pkg.ToString("N0") — paketi düşürüp basabilirsiniz.</span>
                                         }
                                     </div>
-                                    <button type="submit" id="koliUstuSubmitBtn" class="btn btn-warning w-100 sas-submit-btn">Koli Üstü Barkodu</button>
+                                    <button type="submit" id="koliUstuSubmitBtn" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!koliUstuValid)">Koli Üstü Barkodu</button>
                                 </form>
                             </div>
-                            <div class="col-md-4 d-flex flex-column justify-content-end">
-                                <label class="form-label invisible">Aksesuar</label>
-                                <button type="button" class="btn btn-secondary w-100" disabled title="Yakında">Aksesuar Barkodu</button>
-                            </div>
+
                             <div class="col-md-4">
                                 <form asp-action="PrintKoliIci" method="post" class="sas-print-form" novalidate>
                                     @Html.AntiForgeryToken()
@@ -278,34 +346,38 @@
                                     <input type="hidden" asp-for="LineNo" />
                                     <input type="hidden" asp-for="MaterialNumber" />
                                     <input type="hidden" asp-for="MaterialDescription" />
+                                    <input type="hidden" asp-for="OriginalPackageQuantity" />
+                                    <input type="hidden" asp-for="OrderQuantity" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <label asp-for="KoliIciQuantity" class="form-label"></label>
-                                    <input asp-for="KoliIciQuantity" id="koliIciQtyInput" class="form-control mb-2" data-val="false" step="any" min="0.0001"
-                                           data-qty-rule="equal" data-blocked="@(!canPrintKoliIci ? "true" : "false")" disabled="@(!canPrintKoliIci)" />
+                                    <input asp-for="KoliIciQuantity" id="koliIciQtyInput" class="form-control mb-2" data-val="false" step="any" min="1"
+                                           data-qty-rule="box-inside"
+                                           disabled="@koliIciBlocked" />
                                     <div id="koliIciFeedback" class="form-text mb-2">
-                                        @if (!koliUstuPrinted)
+                                        @if (koliIciBlocked)
                                         {
-                                            <span class="text-danger">Bu kalem için önce <strong>Koli Üstü</strong> barkodu basılmalı (SAP: Basılan Koli = 0 iken koli içi barkodu üretilemiyor).</span>
+                                            <span class="text-danger">Koli içi basılamaz (kalan kota: 0).</span>
                                         }
-                                        else if (koliIciRemaining <= 0)
+                                        else if (koliIciValid)
                                         {
-                                            <span class="text-danger">
-                                                Bu kalemde koli içi hakkı kalmamış (SAP Max: 0).
-                                                Basılan koli: <strong>@selected!.PrintedBoxCount</strong>,
-                                                basılan koli içi: <strong>@selected.PrintedInsideBoxCount</strong>.
-                                                Yeni koli için önce <strong>Koli Üstü</strong> basın veya <strong>Yeniden Etiket Yazdır</strong> kullanın.
-                                            </span>
+                                            <text>→ @koliIciCount adet koli içi etiketi@(remainingInside is > 0 ? $" (kalan en fazla {remainingInside.Value:0.####})" : "")</text>
+                                            @if (packageExceedsOrder)
+                                            {
+                                                <span class="text-muted d-block">Not: formdaki paket @pkg.ToString("N0"); SAP'ye koli içi için @pkgForInside.ToString("N0") gider.</span>
+                                            }
                                         }
-                                        else if (koliIciCount > 0)
+                                        else if (remainingInside is > 0 && Model.KoliIciQuantity > remainingInside)
                                         {
-                                            <text>→ @koliIciCount adet koli içi etiketi basılır (kalan hak: @koliIciRemaining)</text>
+                                            <span class="text-danger">Kalan koli içi kotası en fazla @remainingInside.Value.ToString("N0").</span>
                                         }
-                                        else if (Model.PackageQuantity > 0 && Model.KoliIciQuantity > 0)
+                                        else
                                         {
-                                            <span class="text-danger">Koli içi basım adedi paket miktarına (@Model.PackageQuantity.ToString("0.####")) eşit olmalıdır.</span>
+                                            <span class="text-muted">Basılacak adet ≥ 1 ve paket &gt; 0 olmalı.</span>
                                         }
                                     </div>
-                                    <button type="submit" id="koliIciSubmitBtn" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canPrintKoliIci)">Koli İçi Barkodu</button>
+                                    <button type="submit" id="koliIciSubmitBtn" class="btn btn-warning w-100 sas-submit-btn"
+                                            disabled="@(!koliIciValid)"
+                                            title="@(koliIciBlocked ? "Kalan koli içi kotası 0" : null)">Koli İçi Barkodu</button>
                                 </form>
                             </div>
                         </div>
@@ -325,22 +397,79 @@
                     {
                         <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
 
-                        <p class="text-muted small">
-                            Yırtılan / okunmayan etiketi <strong>aynı SERNR</strong> ile yeniden basar.
-                            Yeni barkod üretmez; SAP hakkı (Max) tüketmez. Bu yüzden Max: 0 iken de kullanılabilir.
+                        <p class="text-muted small mb-2">
+                            SAP <code>ZMMIST14000</code> serilerinden seçip aynı SERNR ile tekrar basar.
                         </p>
+
+                        @if (!string.IsNullOrWhiteSpace(Model.SapSerialsError) && Model.SapSerialsCount == 0)
+                        {
+                            <div class="alert alert-warning py-2 small">@Model.SapSerialsError</div>
+                        }
 
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <label asp-for="SerialNumber" class="form-label"></label>
-                                <input asp-for="SerialNumber" id="serialNumberInput" class="form-control" data-val="false" placeholder="Örn. 0000000123456789" />
-                                <div class="form-text">Kalemin son basımından otomatik doldurulur; listeden de seçebilirsiniz.</div>
+                                <div class="fw-semibold small mb-1">Koli üstü — Seri No</div>
+                                <div class="table-responsive border" style="max-height: 220px; overflow-y: auto;">
+                                    <table class="table table-sm table-hover align-middle mb-0">
+                                        <thead class="table-light sticky-top">
+                                            <tr>
+                                                <th>Seri No</th>
+                                                <th style="width:4rem;">Okundu</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="sapSerialsBoxTopBody">
+                                        @if (Model.SapSerialsBoxTop.Count == 0)
+                                        {
+                                            <tr><td colspan="2" class="text-muted small">Koli üstü seri yok.</td></tr>
+                                        }
+                                        else
+                                        {
+                                            foreach (var s in Model.SapSerialsBoxTop)
+                                            {
+                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase);
+                                                <tr class="sas-serial-row @(sel ? "table-warning" : "")" data-sernr="@s.SerialNumber" data-kind="top" style="cursor:pointer;">
+                                                    <td class="font-monospace fw-semibold">@s.SerialNumber</td>
+                                                    <td></td>
+                                                </tr>
+                                            }
+                                        }
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label">Paket Miktar</label>
-                                <input class="form-control" readonly value="@Model.PackageQuantity" />
+                                <div class="fw-semibold small mb-1">Koli içi — Seri No</div>
+                                <div class="table-responsive border" style="max-height: 220px; overflow-y: auto;">
+                                    <table class="table table-sm table-hover align-middle mb-0">
+                                        <thead class="table-light sticky-top">
+                                            <tr>
+                                                <th>Seri No</th>
+                                                <th style="width:4rem;">Okundu</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="sapSerialsBoxInsideBody">
+                                        @if (Model.SapSerialsBoxInside.Count == 0)
+                                        {
+                                            <tr><td colspan="2" class="text-muted small">Koli içi seri yok.</td></tr>
+                                        }
+                                        else
+                                        {
+                                            foreach (var s in Model.SapSerialsBoxInside)
+                                            {
+                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase);
+                                                <tr class="sas-serial-row @(sel ? "table-warning" : "")" data-sernr="@s.SerialNumber" data-kind="inside" style="cursor:pointer;">
+                                                    <td class="font-monospace fw-semibold">@s.SerialNumber</td>
+                                                    <td></td>
+                                                </tr>
+                                            }
+                                        }
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
+
+                        <input type="hidden" asp-for="SerialNumber" id="serialNumberInput" class="sas-sernr-hidden" />
 
                         <div class="row g-3">
                             <div class="col-md-6">
@@ -354,7 +483,7 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
-                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli Üstü Tekrar Bas</button>
+                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli Üstü Barkodu</button>
                                 </form>
                             </div>
                             <div class="col-md-6">
@@ -368,7 +497,7 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
-                                    <button type="submit" class="btn btn-outline-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli İçi Tekrar Bas</button>
+                                    <button type="submit" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli İçi Barkodu</button>
                                 </form>
                             </div>
                         </div>
@@ -482,49 +611,79 @@ else if (selected is not null)
                 serialFields().forEach(f => f.value = serialInput.value);
             }
 
-            // Koli Üstü: basım adedi paket miktarının katı olmalı. Koli İçi: basım adedi paket
-            // miktarına eşit olmalı (koli içindeki her ürün için bir etiket). Kullanıcı yazarken
-            // anında doğrulanır — geçersizse buton devre dışı kalır, sunucuya hiç gitmez.
+            const originalPkgEl = document.getElementById('sapOriginalPackageQuantity');
+            const orderQtyEl = document.getElementById('sapOrderQuantity');
+            const printedBoxEl = document.getElementById('sapPrintedBoxCount');
+            const printedInsideEl = document.getElementById('sapPrintedInsideCount');
+            const resetPkgBtn = document.getElementById('resetPackageQty');
+            const originalPkg = () => parseFloat(originalPkgEl ? originalPkgEl.value : '0') || 0;
+            const orderQty = () => parseFloat(orderQtyEl ? orderQtyEl.value : '0') || 0;
+            const printedBox = () => parseFloat(printedBoxEl ? printedBoxEl.value : '0') || 0;
+            const printedInside = () => parseFloat(printedInsideEl ? printedInsideEl.value : '0') || 0;
+
+            function remainingInsideQty(pkg) {
+                const menge = orderQty();
+                if (menge <= 0) return null;
+                // Koli içi: paket>MENGE ise efektif paket = MENGE.
+                const p = pkg > menge ? menge : (pkg > 0 ? pkg : 0);
+                const rem = menge - (printedBox() * p) - printedInside();
+                return rem < 0 ? 0 : rem;
+            }
+
+            // Doqu: koli üstü = paket katı + ≤ MENGE; koli içi = adet ≥ 1 ve kalan kota > 0.
             function validateQtyInput(input, feedbackEl, submitBtn, rule) {
                 if (!input || !feedbackEl) return;
 
-                const blocked = (input.getAttribute('data-blocked') || '').toLowerCase() === 'true';
-                if (blocked) {
-                    if (submitBtn) submitBtn.disabled = true;
-                    return;
-                }
-
                 const pkg = parseFloat(packageInput ? packageInput.value : '0') || 0;
                 const qty = parseFloat(input.value) || 0;
+                const maxPkg = originalPkg();
+                const menge = orderQty();
                 let valid = false;
                 let count = 0;
+                let msg = '';
 
-                if (pkg > 0 && qty > 0) {
-                    if (rule === 'multiple') {
-                        valid = Math.abs(qty % pkg) < 1e-9;
-                        if (valid) count = Math.round(qty / pkg);
-                    } else if (rule === 'equal') {
-                        valid = Math.abs(qty - pkg) < 1e-9;
-                        if (valid) count = Math.round(qty);
+                if (maxPkg > 0 && pkg > maxPkg) {
+                    msg = '<span class="text-danger">Girilen Değer, Paket Miktarıdan Büyük Olamaz.</span>';
+                } else if (rule === 'box-top') {
+                    if (pkg <= 0 || qty <= 0) {
+                        msg = '';
+                    } else if (menge > 0 && qty > menge) {
+                        msg = '<span class="text-danger">Sipariş miktarını (' + menge + ') aşamaz.</span>';
+                    } else if (Math.abs(qty % pkg) > 1e-9) {
+                        msg = '<span class="text-danger">Girilen Değer, Paket Miktarının Katı Olmalıdır.!</span>';
+                    } else {
+                        valid = true;
+                        count = Math.round(qty / pkg);
+                        msg = '→ ' + count + ' Adet koli üstü etiketi';
+                    }
+                } else if (rule === 'box-inside') {
+                    const rem = remainingInsideQty(pkg);
+                    if (rem === 0) {
+                        msg = '<span class="text-danger">Koli içi basılamaz (kalan kota: 0).</span>';
+                        input.disabled = true;
+                    } else if (pkg <= 0) {
+                        msg = '<span class="text-danger">Lütfen PaKet Miktarını Kontrol Ediniz.</span>';
+                        input.disabled = false;
+                    } else if (qty < 1) {
+                        msg = '<span class="text-danger">Sıfır Olamaz</span>';
+                        input.disabled = false;
+                    } else if (rem != null && qty > rem) {
+                        msg = '<span class="text-danger">Kalan koli içi kotası en fazla ' + rem + '.</span>';
+                        input.disabled = false;
+                    } else {
+                        valid = true;
+                        count = Math.round(qty);
+                        var sapPkg = (menge > 0 && pkg > menge) ? menge : Math.min(pkg, qty);
+                        msg = '→ ' + count + ' adet koli içi etiketi' + (rem != null ? ' (kalan en fazla ' + rem + ')' : '');
+                        if (pkg !== sapPkg) {
+                            msg += '<span class="text-muted d-block">SAP\'ye paket ' + sapPkg + ' gidecek (sizin ' + count + ' adet isteğiniz).</span>';
+                        }
+                        input.disabled = false;
                     }
                 }
 
-                if (qty <= 0 || pkg <= 0) {
-                    feedbackEl.innerHTML = '';
-                } else if (valid) {
-                    const label = rule === 'multiple' ? 'koli üstü' : 'koli içi';
-                    feedbackEl.innerHTML = '→ ' + count + ' adet ' + label + ' etiketi basılır';
-                } else {
-                    const msg = rule === 'multiple'
-                        ? 'Paket miktarının katı olmalıdır.'
-                        : 'Koli içi basım adedi paket miktarına (' + pkg + ') eşit olmalıdır.';
-                    feedbackEl.innerHTML = '<span class="text-danger">' + msg + '</span>';
-                }
-
-                if (submitBtn) {
-                    // Geçerli miktar yoksa veya koli üstü şartı yoksa buton kapalı kalsın.
-                    submitBtn.disabled = !(qty > 0 && pkg > 0 && valid);
-                }
+                feedbackEl.innerHTML = msg;
+                if (submitBtn) submitBtn.disabled = !valid;
             }
 
             function wireQtyValidation(inputId, feedbackId, submitBtnId) {
@@ -537,39 +696,52 @@ else if (selected is not null)
                 const run = () => validateQtyInput(input, feedbackEl, submitBtn, rule);
                 input.addEventListener('input', run);
                 if (packageInput) packageInput.addEventListener('input', run);
+                run();
             }
 
             wireQtyValidation('koliUstuQtyInput', 'koliUstuFeedback', 'koliUstuSubmitBtn');
             wireQtyValidation('koliIciQtyInput', 'koliIciFeedback', 'koliIciSubmitBtn');
 
-            if (toggleBtn && packageInput) {
-                toggleBtn.addEventListener('click', function () {
-                    const editing = packageInput.readOnly;
-                    packageInput.readOnly = !editing;
-                    toggleBtn.textContent = editing ? 'Kilitle' : 'Düzenle';
-                    toggleBtn.classList.toggle('btn-outline-secondary', !editing);
-                    toggleBtn.classList.toggle('btn-warning', editing);
-                    if (editing) packageInput.focus();
-                });
+            if (packageInput) {
                 packageInput.addEventListener('input', syncPackageQty);
                 syncPackageQty();
+            }
+            if (resetPkgBtn && packageInput && originalPkgEl) {
+                resetPkgBtn.addEventListener('click', function () {
+                    packageInput.value = originalPkgEl.value;
+                    syncPackageQty();
+                    packageInput.dispatchEvent(new Event('input'));
+                });
             }
 
             document.querySelectorAll('.sas-print-form, .sas-reprint-form').forEach(function (form) {
                 form.addEventListener('submit', function (e) {
-                    const qtyInput = form.querySelector('[data-qty-rule]');
-                    if (qtyInput) {
-                        const blocked = (qtyInput.getAttribute('data-blocked') || '').toLowerCase() === 'true';
-                        if (blocked) {
+                    const isReprint = form.classList.contains('sas-reprint-form');
+                    if (isReprint) {
+                        syncSerialNumber();
+                        const sn = (document.getElementById('serialNumberInput') || {}).value || '';
+                        if (!String(sn).trim()) {
                             e.preventDefault();
+                            alert('Önce listeden bir SERNR seçin.');
                             return;
                         }
+                    }
+
+                    const qtyInput = form.querySelector('[data-qty-rule]');
+                    if (qtyInput) {
                         const pkg = parseFloat(packageInput ? packageInput.value : '0') || 0;
                         const qty = parseFloat(qtyInput.value) || 0;
                         const rule = qtyInput.getAttribute('data-qty-rule');
-                        const valid = rule === 'multiple'
-                            ? (pkg > 0 && qty > 0 && qty % pkg === 0)
-                            : (pkg > 0 && qty > 0 && qty === pkg);
+                        const maxPkg = originalPkg();
+                        const menge = orderQty();
+                        let valid = false;
+                        if (maxPkg > 0 && pkg > maxPkg) valid = false;
+                        else if (rule === 'box-top') {
+                            valid = pkg > 0 && qty > 0 && Math.abs(qty % pkg) < 1e-9 && (menge <= 0 || qty <= menge);
+                        }                         else if (rule === 'box-inside') {
+                            const rem = remainingInsideQty(pkg);
+                            valid = rem !== 0 && pkg > 0 && qty >= 1 && (rem == null || qty <= rem);
+                        }
                         if (!valid) {
                             e.preventDefault();
                             return;
@@ -588,6 +760,23 @@ else if (selected is not null)
 
             const feedback = document.getElementById('print-feedback');
             if (feedback) feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+            function selectSernr(sernr) {
+                if (!sernr) return;
+                document.querySelectorAll('.sas-sernr-hidden, #serialNumberInput').forEach(function (f) {
+                    f.value = sernr;
+                });
+                document.querySelectorAll('tr.sas-serial-row').forEach(function (row) {
+                    row.classList.toggle('table-warning', row.getAttribute('data-sernr') === sernr);
+                });
+            }
+
+            document.querySelectorAll('tr.sas-serial-row').forEach(function (row) {
+                row.addEventListener('click', function () {
+                    selectSernr(row.getAttribute('data-sernr'));
+                });
+            });
+            syncSerialNumber();
         })();
 
         (function () {

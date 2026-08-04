@@ -8,3 +8,48 @@ NW RFC Library: Kernel variant, Release 750 Patch Level 9, Compiled on Jan 19 20
 
 2026-07-22 17:51:39.005026 [232032] >> Info entry
 	Did not find config file C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api\sapnwrfc.ini.
+
+**** Log file opened at 2026-07-24 09:12:01.730721 UTC+03:00 (Türkiye Standart Saati), Encoding UTF-8
+NW RFC Library: Kernel variant, Release 750 Patch Level 9, Compiled on Jan 19 2022 05:10:42
+ CPIC library: 753.2021.05.10 version 3, NI library: 40, Kernel Release: 753 Patch Level 919
+ Current working directory: C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api, Program: FasonBarkod
+ Hardware: PC with Windows NT 12x AMD64 Level 6 (Mod 186 Step 3), Operating_system: Windows NT 10.0
+ Hostname: BY6-KAY-BT-11, IP address: 10.100.110.46, IPv6 address: fe80::bcac:57df:f86d:a535
+
+2026-07-24 09:12:01.730879 [239360] >> Error entry
+	[Handle: 1995057516560	ConvID: 83146172	Target: dqdapl.erciyes.com	SysID: DQD	SysNr: 00	User: 170RFC	Mandant: 100	Language: T	Codepage: 4103]
+	RfcABAPException: Key: FU_NOT_FOUND, Code: RFC_ABAP_EXCEPTION, Message: ID:FL Type:E Number:046 ZMM_N_SAS_S
+2026-07-24 09:15:45.881567 [234360] >> Error entry
+	[Handle: 1995056157088	ConvID: 83381427	Target: dqdapl.erciyes.com	SysID: DQD	SysNr: 00	User: 170RFC	Mandant: 100	Language: T	Codepage: 4103]
+	RfcABAPException: Key: FU_NOT_FOUND, Code: RFC_ABAP_EXCEPTION, Message: ID:FL Type:E Number:046 ZMM_N_SAS_S
+
+**** Log file opened at 2026-07-24 10:29:27.353840 UTC+03:00 (Türkiye Standart Saati), Encoding UTF-8
+NW RFC Library: Kernel variant, Release 750 Patch Level 9, Compiled on Jan 19 2022 05:10:42
+ CPIC library: 753.2021.05.10 version 3, NI library: 40, Kernel Release: 753 Patch Level 919
+ Current working directory: C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api, Program: FasonBarkod
+ Hardware: PC with Windows NT 12x AMD64 Level 6 (Mod 186 Step 3), Operating_system: Windows NT 10.0
+ Hostname: BY6-KAY-BT-11, IP address: 10.100.110.46, IPv6 address: fe80::bcac:57df:f86d:a535
+
+2026-07-24 10:29:27.354430 [100960] >> Info entry
+	Error in receive: 18, no SAP ErrInfo available, 580
+2026-07-24 10:29:27.360053 [100960] >> Error entry
+	[Handle: 2600650578000	ConvID: 87052987	Target: dqdapl.erciyes.com	SysID: DQD	SysNr: 00	User: 170RFC	Mandant: 100	Language: T	Codepage: 4103]
+	RfcSystemException: Key: SAPSQL_PARSE_ERROR, Code: RFC_ABAP_RUNTIME_FAILURE, Message: An error has occurred while parsing a dynamic entry.
+2026-07-24 10:30:25.620641 [222824] >> Info entry
+	Error in receive: 18, no SAP ErrInfo available, 580
+2026-07-24 10:30:25.622542 [222824] >> Error entry
+	[Handle: 2600649392640	ConvID: 87119231	Target: dqdapl.erciyes.com	SysID: DQD	SysNr: 00	User: 170RFC	Mandant: 100	Language: T	Codepage: 4103]
+	RfcSystemException: Key: SAPSQL_PARSE_ERROR, Code: RFC_ABAP_RUNTIME_FAILURE, Message: An error has occurred while parsing a dynamic entry.
+
+**** Log file opened at 2026-07-24 11:40:15.359122 UTC+03:00 (Türkiye Standart Saati), Encoding UTF-8
+NW RFC Library: Kernel variant, Release 750 Patch Level 9, Compiled on Jan 19 2022 05:10:42
+ CPIC library: 753.2021.05.10 version 3, NI library: 40, Kernel Release: 753 Patch Level 919
+ Current working directory: C:\Users\busra.tekel\source\repos\FasonBarkod\src\FasonBarkod.Api, Program: FasonBarkod
+ Hardware: PC with Windows NT 12x AMD64 Level 6 (Mod 186 Step 3), Operating_system: Windows NT 10.0
+ Hostname: BY6-KAY-BT-11, IP address: 10.100.110.46, IPv6 address: fe80::bcac:57df:f86d:a535
+
+2026-07-24 11:40:15.359414 [136536] >> Info entry
+	Error in receive: 18, no SAP ErrInfo available, 580
+2026-07-24 11:40:15.363041 [136536] >> Error entry
+	[Handle: 2220541183360	ConvID: 91510602	Target: dqdapl.erciyes.com	SysID: DQD	SysNr: 00	User: 170RFC	Mandant: 100	Language: T	Codepage: 4103]
+	RfcSystemException: Key: SAPSQL_PARSE_ERROR, Code: RFC_ABAP_RUNTIME_FAILURE, Message: An error has occurred while parsing a dynamic entry.

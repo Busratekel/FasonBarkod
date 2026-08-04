@@ -29,6 +29,26 @@ public class SapOptions
         !string.IsNullOrWhiteSpace(Password);
 }
 
+/// <summary>
+/// Eski Doqu ASMX (barcode.doqu.com.tr) — seri listesi için GetSAPSASBarcodeSerials.
+/// UserName/Password boşsa Sap.User / Sap.Password kullanılır.
+/// </summary>
+public class SapBarcodeSoapOptions
+{
+    public const string SectionName = "SapBarcodeSoap";
+
+    public bool Enabled { get; set; }
+
+    public string Url { get; set; } = "https://barcode.doqu.com.tr/service.asmx";
+
+    public string UserName { get; set; } = string.Empty;
+
+    public string Password { get; set; } = string.Empty;
+
+    /// <summary>SAS seri listesi Durum bayrağı (eski kod: '*').</summary>
+    public string SasDurum { get; set; } = "*";
+}
+
 public class LdapOptions
 {
     public const string SectionName = "Ldap";

@@ -2,6 +2,7 @@ using FasonBarkod.Core.Entities;
 using FasonBarkod.Core.Enums;
 using FasonBarkod.Core.Sap;
 using FasonBarkod.Infrastructure.Data;
+using FasonBarkod.Infrastructure.Sap;
 using FasonBarkod.Infrastructure.Services;
 using FasonBarkod.Web.Configuration;
 using FasonBarkod.Web.Models;
@@ -21,7 +22,8 @@ public class SasController(
     UserManager<ApplicationUser> userManager,
     ILabelPrintService labelPrintService,
     IPrintSettingsStore printSettingsStore,
-    IOptions<TestingOptions> testingOptions) : Controller
+    IOptions<TestingOptions> testingOptions,
+    ILogger<SasController> logger) : Controller
 {
     private readonly TestingOptions _testingOptions = testingOptions.Value;
 
@@ -93,10 +95,24 @@ public class SasController(
         // Giriş sonrası / SAS sayfası açılınca Listele'ye basmadan listeyi getir.
         if (!string.IsNullOrWhiteSpace(purchaseOrderNo))
         {
+            if (!SapAccountNumber.TryNormalizeEbeln(purchaseOrderNo, out var ebeln, out var ebelnError))
+            {
+                ModelState.AddModelError(string.Empty, ebelnError!);
+                var isAdminEarly = User.IsInRole("Admin");
+                return View(new SasSearchViewModel
+                {
+                    PurchaseOrderNo = purchaseOrderNo,
+                    VendorCode = await ResolveVendorCodeForListAsync(vendorCode),
+                    VendorCodeLocked = !isAdminEarly,
+                    Page = page,
+                    PageSize = pageSize
+                });
+            }
+
             var resolvedForRedirect = await ResolveVendorCodeAsync(vendorCode);
             return RedirectToAction(nameof(Detail), new
             {
-                id = purchaseOrderNo.Trim(),
+                id = ebeln,
                 vendorCode = resolvedForRedirect
             });
         }
@@ -134,9 +150,15 @@ public class SasController(
 
         if (!string.IsNullOrWhiteSpace(model.PurchaseOrderNo))
         {
+            if (!SapAccountNumber.TryNormalizeEbeln(model.PurchaseOrderNo, out var ebeln, out var ebelnError))
+            {
+                ModelState.AddModelError(string.Empty, ebelnError!);
+                return View(model);
+            }
+
             return RedirectToAction(nameof(Detail), new
             {
-                id = model.PurchaseOrderNo.Trim(),
+                id = ebeln,
                 vendorCode = resolvedVendor
             });
         }
@@ -195,8 +217,7 @@ public class SasController(
             ModelState.AddModelError(
                 string.Empty,
                 response.Error
-                ?? response.SapMessage
-                ?? "SAS listesi boş.");
+                ?? "Listelenecek SAS bulunamadı.");
             return model;
         }
 
@@ -317,6 +338,18 @@ public class SasController(
             return NotFound();
         }
 
+        if (!SapAccountNumber.TryNormalizeEbeln(id, out var normalizedId, out var ebelnError))
+        {
+            ModelState.AddModelError(string.Empty, ebelnError!);
+            return View("Index", new SasSearchViewModel
+            {
+                PurchaseOrderNo = id,
+                VendorCodeLocked = !User.IsInRole("Admin")
+            });
+        }
+
+        id = normalizedId;
+
         var resolvedVendor = await ResolveVendorCodeAsync(vendorCode);
 
         if (!User.IsInRole("Admin") && string.IsNullOrWhiteSpace(resolvedVendor))
@@ -336,7 +369,7 @@ public class SasController(
         {
             ModelState.AddModelError(
                 string.Empty,
-                listError ?? $"SAS bulunamadı: {id}. SAP bu numara/cari ile kalem döndürmedi.");
+                listError ?? $"“{id}” numaralı SAS bulunamadı. Numarayı kontrol edin.");
             return View("Index", new SasSearchViewModel
             {
                 PurchaseOrderNo = id,
@@ -368,7 +401,27 @@ public class SasController(
                 cancellationToken) ?? string.Empty;
         }
 
+        await LoadSapSerialsAsync(model, cancellationToken);
+
         return View(model);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> Serials(
+        string id,
+        string lineNo,
+        bool boxInside = false,
+        string? vendorCode = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(lineNo))
+        {
+            return BadRequest(new { error = "SAS no ve kalem zorunludur." });
+        }
+
+        _ = vendorCode;
+        var result = await apiClient.ListSasSerialsAsync(id, lineNo, boxInside, cancellationToken);
+        return Json(result);
     }
 
     [HttpPost]
@@ -428,41 +481,77 @@ public class SasController(
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
-        if (model.PackageQuantity <= 0 || printQuantity <= 0)
+        var currentLines = await apiClient.ListSasAsync(model.PurchaseOrderNo, model.VendorCode, cancellationToken);
+        var currentLine = currentLines.Lines.FirstOrDefault(l =>
+            string.Equals(l.LineNo, model.LineNo, StringComparison.OrdinalIgnoreCase)
+            || (int.TryParse(l.LineNo, out var a) && int.TryParse(model.LineNo, out var b) && a == b));
+        if (currentLine is null)
         {
-            ModelState.AddModelError(string.Empty, "Paket miktarı ve basım miktarı 0'dan büyük olmalıdır.");
+            ModelState.AddModelError(string.Empty, "Seçili kalem SAP listesinde bulunamadı. Sayfayı yenileyip tekrar deneyin.");
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
-        if (!PackageQuantityValidator.IsValidMultiple(printQuantity, model.PackageQuantity, labelType))
+        var originalPackage = currentLine.PackageQuantity > 0
+            ? currentLine.PackageQuantity
+            : model.OriginalPackageQuantity;
+        model.OriginalPackageQuantity = originalPackage;
+        model.OrderQuantity = currentLine.Quantity;
+
+        // Paket sadece Admin değiştirebilir; operatörde form manipülasyonu da SAP paketini kullanır.
+        if (!User.IsInRole("Admin"))
         {
-            ModelState.AddModelError(string.Empty, PackageQuantityValidator.GetValidationError(labelType));
+            model.PackageQuantity = originalPackage > 0 ? originalPackage : currentLine.PackageQuantity;
+        }
+
+        // Doqu: kullanıcı paketi düşürebilir; SAP orijinalinden büyük olamaz. Üzerine yazma.
+        var validationError = PackageQuantityValidator.ValidateNewPrint(
+            labelType,
+            printQuantity,
+            model.PackageQuantity,
+            currentLine.Quantity,
+            originalPackage);
+        if (!string.IsNullOrWhiteSpace(validationError))
+        {
+            ModelState.AddModelError(string.Empty, validationError);
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
         if (labelType == LabelType.KoliIci)
         {
-            // Yalnızca SAP'deki Basılan Koli (PrintedBoxCount) > 0 ise koli içine izin ver.
-            // Yerel/MOCK koli üstü kaydı SAP hakkını açmaz; aksi halde Max:0 iken yine basım denenebiliyordu.
-            var currentLines = await apiClient.ListSasAsync(model.PurchaseOrderNo, model.VendorCode, cancellationToken);
-            var currentLine = currentLines.Lines.FirstOrDefault(l => l.LineNo == model.LineNo);
-            var hasSapBoxTop = currentLine is { PrintedBoxCount: > 0 };
-
-            if (!hasSapBoxTop)
+            var remaining = PackageQuantityValidator.RemainingInsideQuantity(
+                currentLine.Quantity,
+                model.PackageQuantity,
+                currentLine.PrintedBoxCount,
+                currentLine.PrintedInsideBoxCount);
+            if (remaining is 0)
             {
                 ModelState.AddModelError(
                     string.Empty,
-                    "Koli içi barkodu basılamıyor: bu kalem için henüz SAP'de \"Koli Üstü\" barkodu basılmamış (Basılan Koli = 0). " +
-                    "Önce Koli Üstü Barkodu butonunu kullanın.");
+                    "Koli içi basılamaz (kalan kota: 0).");
                 return await RenderDetailWithErrorsAsync(model, cancellationToken);
             }
+
+            if (remaining is > 0 && printQuantity > remaining.Value)
+            {
+                ModelState.AddModelError(
+                    string.Empty,
+                    $"Koli içi en fazla {remaining.Value:0.####} basılabilir (kalan kota).");
+                return await RenderDetailWithErrorsAsync(model, cancellationToken);
+            }
+        }
+
+        // Ekrandaki paket (Admin düzenlediyse o değer) olduğu gibi SAP'ye gider.
+        var packageForSap = model.PackageQuantity;
+        if (packageForSap <= 0)
+        {
+            packageForSap = printQuantity > 0 ? printQuantity : 1;
         }
 
         var result = await apiClient.CreateSasBarcodeAsync(new CreateSasBarcodeRequest(
             model.PurchaseOrderNo,
             model.LineNo,
             model.MaterialNumber,
-            model.PackageQuantity,
+            packageForSap,
             printQuantity,
             labelType,
             User.Identity?.Name,
@@ -470,7 +559,7 @@ public class SasController(
 
         if (!result.Success && !IsAllowedMockBarcodeResult(result))
         {
-            ModelState.AddModelError(string.Empty, result.ErrorMessage ?? "SAP barkod alınamadı.");
+            ModelState.AddModelError(string.Empty, FormatSapPrintError(result.ErrorMessage, labelType));
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
@@ -531,7 +620,7 @@ public class SasController(
 
         if (string.IsNullOrWhiteSpace(model.SerialNumber))
         {
-            ModelState.AddModelError(string.Empty, "Tekrar basım için seri numarası (SERNR) zorunludur.");
+            ModelState.AddModelError(string.Empty, "Tekrar basım için listeden bir SERNR seçin.");
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
@@ -550,20 +639,54 @@ public class SasController(
 
         if (!hasPrinted)
         {
+            var serialCheck = await apiClient.ListSasSerialsAsync(
+                model.PurchaseOrderNo,
+                model.LineNo,
+                labelType == LabelType.KoliIci,
+                cancellationToken);
+            hasPrinted = serialCheck.Serials.Count > 0;
+        }
+
+        if (!hasPrinted)
+        {
             ModelState.AddModelError(string.Empty, "Bu kalemde henüz basılmış etiket yok. Önce Etiket Yazdır ile basım yapın.");
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
-        if (model.PackageQuantity <= 0)
+        // Paket sadece Admin değiştirebilir.
+        if (!User.IsInRole("Admin"))
         {
-            ModelState.AddModelError(string.Empty, "Paket miktarı 0'dan büyük olmalıdır.");
-            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+            var forcedPackage = model.OriginalPackageQuantity > 0
+                ? model.OriginalPackageQuantity
+                : model.PackageQuantity;
+            if (forcedPackage > 0)
+            {
+                model.PackageQuantity = forcedPackage;
+            }
         }
+
+        // Doqu: koli üstü reprint'te paket kontrolü yok (PaketIci=0). Koli içi reprint'te paket zorunlu.
+        if (labelType == LabelType.KoliIci)
+        {
+            if (model.PackageQuantity <= 0)
+            {
+                ModelState.AddModelError(string.Empty, PackageQuantityValidator.PackageRequiredError);
+                return await RenderDetailWithErrorsAsync(model, cancellationToken);
+            }
+
+            if (model.OriginalPackageQuantity > 0 && model.PackageQuantity > model.OriginalPackageQuantity)
+            {
+                ModelState.AddModelError(string.Empty, PackageQuantityValidator.PackageTooLargeError);
+                return await RenderDetailWithErrorsAsync(model, cancellationToken);
+            }
+        }
+
+        var packageForSap = labelType == LabelType.KoliUstu ? 0 : model.PackageQuantity;
 
         var result = await apiClient.ReprintSasBarcodeAsync(new ReprintSasBarcodeRequest(
             model.PurchaseOrderNo,
             model.LineNo,
-            model.PackageQuantity,
+            packageForSap,
             labelType,
             model.SerialNumber.Trim(),
             User.Identity?.Name,
@@ -817,12 +940,154 @@ public class SasController(
             model.VendorCode,
             model.LineNo,
             cancellationToken);
+        await LoadSapSerialsAsync(refreshed, cancellationToken);
         return View("Detail", refreshed);
+    }
+
+    private async Task LoadSapSerialsAsync(
+        SasDetailViewModel model,
+        CancellationToken cancellationToken)
+    {
+        model.SapSerialsBoxTop = [];
+        model.SapSerialsBoxInside = [];
+        model.SapSerialsError = null;
+
+        if (string.IsNullOrWhiteSpace(model.PurchaseOrderNo) || string.IsNullOrWhiteSpace(model.LineNo))
+        {
+            return;
+        }
+
+        var topTask = apiClient.ListSasSerialsAsync(
+            model.PurchaseOrderNo, model.LineNo, boxInside: false, cancellationToken);
+        var insideTask = apiClient.ListSasSerialsAsync(
+            model.PurchaseOrderNo, model.LineNo, boxInside: true, cancellationToken);
+        await Task.WhenAll(topTask, insideTask);
+
+        var top = await topTask;
+        var inside = await insideTask;
+
+        model.SapSerialsBoxTop = top.Serials.ToList();
+        model.SapSerialsBoxInside = inside.Serials.ToList();
+
+        // SOAP boşsa (test/canlı uyumsuzluğu vb.) bu uygulamada basılan SERNR/barkodları göster.
+        if (model.SapSerialsBoxTop.Count == 0 || model.SapSerialsBoxInside.Count == 0)
+        {
+            var local = await LoadLocalSerialsAsync(
+                model.PurchaseOrderNo, model.LineNo, model.VendorCode, cancellationToken);
+            if (model.SapSerialsBoxTop.Count == 0)
+            {
+                model.SapSerialsBoxTop = local.BoxTop;
+            }
+
+            if (model.SapSerialsBoxInside.Count == 0)
+            {
+                model.SapSerialsBoxInside = local.BoxInside;
+            }
+        }
+
+        if (model.SapSerialsCount == 0)
+        {
+            model.SapSerialsError = top.ErrorMessage ?? inside.ErrorMessage;
+            if (string.IsNullOrWhiteSpace(model.SapSerialsError))
+            {
+                model.SapSerialsError =
+                    "Bu kalemde henüz listelenecek seri yok. Önce etiket basımı yapın; " +
+                    "SOAP servisi ile SAP ortamı (test/canlı) aynı olmalı.";
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(model.SerialNumber))
+        {
+            model.SerialNumber = model.SapSerialsBoxTop.FirstOrDefault()?.SerialNumber
+                ?? model.SapSerialsBoxInside.FirstOrDefault()?.SerialNumber
+                ?? string.Empty;
+        }
+    }
+
+    private async Task<(List<SasSerialDto> BoxTop, List<SasSerialDto> BoxInside)> LoadLocalSerialsAsync(
+        string purchaseOrderNo,
+        string lineNo,
+        string? vendorCode,
+        CancellationToken cancellationToken)
+    {
+        var query = context.BarcodePrints
+            .AsNoTracking()
+            .Where(x => x.SalesOrderNo == purchaseOrderNo && x.SapSent);
+
+        if (!string.IsNullOrWhiteSpace(lineNo))
+        {
+            query = query.Where(x => x.LineNo == lineNo);
+        }
+
+        if (!string.IsNullOrWhiteSpace(vendorCode))
+        {
+            query = query.Where(x => x.VendorCode == vendorCode);
+        }
+
+        var rows = await query
+            .OrderByDescending(x => x.PrintDate)
+            .Select(x => new { x.SerialNumber, x.BarcodeNo, x.LabelType, x.Quantity })
+            .Take(200)
+            .ToListAsync(cancellationToken);
+
+        static string PickSernr(string? serial, string? barcode) =>
+            !string.IsNullOrWhiteSpace(serial) ? serial.Trim() : (barcode?.Trim() ?? string.Empty);
+
+        var top = rows
+            .Where(x => x.LabelType == LabelType.KoliUstu)
+            .Select(x => PickSernr(x.SerialNumber, x.BarcodeNo))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(s => new SasSerialDto(purchaseOrderNo, lineNo, s, 0, "AD", "*", " "))
+            .ToList();
+
+        var inside = rows
+            .Where(x => x.LabelType == LabelType.KoliIci)
+            .Select(x => PickSernr(x.SerialNumber, x.BarcodeNo))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(s => new SasSerialDto(purchaseOrderNo, lineNo, s, 0, "AD", "*", "X"))
+            .ToList();
+
+        return (top, inside);
+    }
+
+    private static string FormatSapPrintError(string? sapMessage, LabelType labelType)
+    {
+        if (string.IsNullOrWhiteSpace(sapMessage))
+        {
+            return "SAP barkod alınamadı.";
+        }
+
+        if (sapMessage.Contains("Max:", StringComparison.OrdinalIgnoreCase)
+            && (sapMessage.Contains("koli içi", StringComparison.OrdinalIgnoreCase)
+                || labelType == LabelType.KoliIci))
+        {
+            return "SAP koli içi basıma izin vermedi (Max: 0). "
+                + "Paket miktarı sipariş miktarından büyükse önce paketi düşürün; "
+                + "veya bu kalemde koli içi tanımlı olmayabilir. "
+                + $"({sapMessage})";
+        }
+
+        if (sapMessage.Contains("Max:", StringComparison.OrdinalIgnoreCase)
+            && (sapMessage.Contains("koli üstü", StringComparison.OrdinalIgnoreCase)
+                || labelType == LabelType.KoliUstu))
+        {
+            return "SAP koli üstü basıma izin vermedi (Max: 0). "
+                + "Paket sipariş miktarının katı olmalı ve kalan kota olmalı. "
+                + $"({sapMessage})";
+        }
+
+        return sapMessage;
     }
 
     private static void ApplyPostedPrintState(SasDetailViewModel target, SasDetailViewModel source)
     {
         target.PackageQuantity = source.PackageQuantity;
+        target.OriginalPackageQuantity = source.OriginalPackageQuantity > 0
+            ? source.OriginalPackageQuantity
+            : target.OriginalPackageQuantity;
+        target.OrderQuantity = source.OrderQuantity > 0 ? source.OrderQuantity : target.OrderQuantity;
         target.KoliUstuQuantity = source.KoliUstuQuantity;
         target.KoliIciQuantity = source.KoliIciQuantity;
         target.SerialNumber = source.SerialNumber;
@@ -838,22 +1103,21 @@ public class SasController(
         var response = await apiClient.ListSasAsync(purchaseOrderNo, vendorCode, cancellationToken);
         if (response.Lines.Count == 0)
         {
-            var message = response.Error
-                ?? $"SAS bulunamadı: {purchaseOrderNo}. SAP bu numara/cari ile kalem döndürmedi.";
+            
+            logger.LogWarning(
+                "SAS bulunamadı: {OrderNo}, cari={Vendor}, sap={Sap}, hint={Hint}",
+                purchaseOrderNo,
+                vendorCode ?? "(boş)",
+                response.SapMessage ?? "(yok)",
+                response.Hint ?? "(yok)");
 
-            if (!string.IsNullOrWhiteSpace(response.SapMessage))
-            {
-                message = $"{message} SAP mesajı: \"{response.SapMessage}\"";
-            }
+            var message = !string.IsNullOrWhiteSpace(response.Error)
+                ? response.Error!
+                : $"“{purchaseOrderNo}” numaralı SAS bulunamadı. Numarayı kontrol edin.";
 
-            if (!string.IsNullOrWhiteSpace(response.Hint))
+            if (!string.IsNullOrWhiteSpace(vendorCode))
             {
-                message = $"{message} {response.Hint}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(response.Diagnostic))
-            {
-                message = $"{message} Tanılama: {response.Diagnostic}";
+                message += " Satıcı kodunuz ile eşleşmiyor olabilir.";
             }
 
             return (null, message);

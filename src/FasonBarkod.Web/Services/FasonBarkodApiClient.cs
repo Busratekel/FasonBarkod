@@ -30,6 +30,12 @@ public interface IFasonBarkodApiClient
     Task<SapBarcodeResult> ReprintSasBarcodeAsync(
         ReprintSasBarcodeRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<SasSerialListResult> ListSasSerialsAsync(
+        string purchaseOrderNo,
+        string lineNo,
+        bool boxInside = false,
+        CancellationToken cancellationToken = default);
 }
 
 public record CreateSasBarcodeRequest(
@@ -168,6 +174,46 @@ public class FasonBarkodApiClient(
         {
             logger.LogError(ex, "SAS tekrar basım API bağlantı hatası");
             return new SapBarcodeResult(false, "API'ye bağlanılamadı. API projesini çalıştırın.", [], null);
+        }
+    }
+
+    public async Task<SasSerialListResult> ListSasSerialsAsync(
+        string purchaseOrderNo,
+        string lineNo,
+        bool boxInside = false,
+        CancellationToken cancellationToken = default)
+    {
+        var url =
+            $"api/sas/{Uri.EscapeDataString(purchaseOrderNo)}/serials" +
+            $"?lineNo={Uri.EscapeDataString(lineNo)}" +
+            $"&boxInside={boxInside.ToString().ToLowerInvariant()}";
+
+        try
+        {
+            var response = await httpClient.GetAsync(url, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning("SAS seri listesi API hatası: {Status} {Body}", response.StatusCode, body);
+                try
+                {
+                    var error = JsonSerializer.Deserialize<ApiErrorResponse>(body, JsonOptions);
+                    return new SasSerialListResult(false, error?.Error ?? body, []);
+                }
+                catch
+                {
+                    return new SasSerialListResult(false, body, []);
+                }
+            }
+
+            var result = JsonSerializer.Deserialize<SasSerialListResult>(body, JsonOptions);
+            return result ?? new SasSerialListResult(false, "API boş yanıt döndü.", []);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or SocketException)
+        {
+            logger.LogError(ex, "SAS seri listesi API bağlantı hatası");
+            return new SasSerialListResult(false, "API'ye bağlanılamadı. API projesini çalıştırın.", []);
         }
     }
 

@@ -342,14 +342,26 @@ public static class ZmmSasBImportMapper
     {
         var isBoxTop = request.LabelType == LabelType.KoliUstu;
         var printQty = (int)request.PrintQuantity;
-        var packageQty = (int)request.PackageQuantity;
+        // Koli üstü: etiket üzerindeki "KOLİ X ADET" için paket kritik.
+        // Koli içi: operatör "N adet ürün etiketi" ister; SAP'ye giden I_PAKET_ICI
+        // formdaki büyük paket (örn. 5) ile basım adedi (1) çakışınca Max:0 olur.
+        // Bu yüzden koli içide paket = min(form paketi, basılacak adet).
+        var packageQty = isBoxTop
+            ? (int)request.PackageQuantity
+            : (int)Math.Min(
+                request.PackageQuantity > 0 ? request.PackageQuantity : printQty,
+                printQty > 0 ? printQty : request.PackageQuantity);
+        if (packageQty <= 0)
+        {
+            packageQty = Math.Max(printQty, 1);
+        }
+
         // I_BASILACAK_BARKOD = üretilecek etiket/barkod adedi.
         // Koli üstü: basım miktarı ÷ paket (örn. 10/5 → 2 etiket).
         // Koli içi: basım miktarı (örn. 5 → 5 etiket).
-        // Eskiden printQty gönderiliyordu; koli üstünde SAP'e 10 gidince tek satır dönüyordu.
         var barcodesToPrint = PackageQuantityValidator.CalculateLabelCount(
             request.PrintQuantity,
-            request.PackageQuantity,
+            isBoxTop ? request.PackageQuantity : packageQty,
             request.LabelType);
 
         return new ZmmSasBInvoke
@@ -359,8 +371,8 @@ public static class ZmmSasBImportMapper
             BoxTopPrintQuantity = isBoxTop ? printQty : 0,
             BoxInsidePrintQuantity = isBoxTop ? 0 : printQty,
             PackageInsideQuantity = packageQty,
-            PrintBoxTop = isBoxTop ? "X" : string.Empty,
-            PrintBoxInside = isBoxTop ? string.Empty : "X",
+            PrintBoxTop = isBoxTop ? "X" : " ",
+            PrintBoxInside = isBoxTop ? " " : "X",
             BarcodesToPrint = barcodesToPrint
         };
     }
@@ -373,13 +385,56 @@ public static class ZmmSasBImportMapper
         {
             PurchaseOrderNo = SapAccountNumber.Pad10(request.PurchaseOrderNo),
             LineNo = ParseLineNo(request.LineNo),
-            PackageInsideQuantity = (int)request.PackageQuantity,
-            PrintBoxTop = isBoxTop ? "X" : string.Empty,
-            PrintBoxInside = isBoxTop ? string.Empty : "X",
+            // Eski Doqu: koli üstü reprint'te PaketIci=0; koli içi reprint'te paket miktarı.
+            PackageInsideQuantity = isBoxTop ? 0 : (int)request.PackageQuantity,
+            PrintBoxTop = isBoxTop ? "X" : " ",
+            PrintBoxInside = isBoxTop ? " " : "X",
             SerialNumber = request.SerialNumber.Trim()
         };
     }
 
     private static int ParseLineNo(string lineNo) =>
         int.TryParse(lineNo.Trim(), out var parsed) ? parsed : 0;
+}
+
+/// <summary>
+/// Standart RFC_READ_TABLE — ZMMIST14000 seri listesi.
+/// </summary>
+public class RfcReadTableInvoke
+{
+    [SapName("QUERY_TABLE")]
+    public string QueryTable { get; set; } = string.Empty;
+
+    [SapName("DELIMITER")]
+    public string Delimiter { get; set; } = "|";
+
+    [SapName("ROWCOUNT")]
+    public int RowCount { get; set; }
+
+    [SapName("OPTIONS")]
+    public RfcReadTableOptionRow[] Options { get; set; } = [];
+
+    [SapName("FIELDS")]
+    public RfcReadTableFieldRow[] Fields { get; set; } = [];
+
+    [SapName("DATA")]
+    public RfcReadTableDataRow[] Data { get; set; } = [];
+}
+
+public class RfcReadTableOptionRow
+{
+    [SapName("TEXT")]
+    public string Text { get; set; } = string.Empty;
+}
+
+public class RfcReadTableFieldRow
+{
+    [SapName("FIELDNAME")]
+    public string FieldName { get; set; } = string.Empty;
+}
+
+public class RfcReadTableDataRow
+{
+    [SapName("WA")]
+    public string Wa { get; set; } = string.Empty;
 }

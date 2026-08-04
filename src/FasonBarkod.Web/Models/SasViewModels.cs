@@ -69,6 +69,12 @@ public class SasDetailViewModel
     [Display(Name = "Paket Miktar")]
     public decimal PackageQuantity { get; set; }
 
+    /// <summary>SAP satırındaki orijinal PAKET_MIKTARI (üst sınır).</summary>
+    public decimal OriginalPackageQuantity { get; set; }
+
+    /// <summary>SAP MENGE — koli üstü basım üst sınırı.</summary>
+    public decimal OrderQuantity { get; set; }
+
     [Display(Name = "Basılacak Koli Üstü Miktar")]
     public decimal KoliUstuQuantity { get; set; }
 
@@ -77,6 +83,16 @@ public class SasDetailViewModel
 
     [Display(Name = "Seri No (SERNR)")]
     public string SerialNumber { get; set; } = string.Empty;
+
+    /// <summary>SAP ZMMIST14000 — koli üstü serileri.</summary>
+    public List<SasSerialDto> SapSerialsBoxTop { get; set; } = [];
+
+    /// <summary>SAP ZMMIST14000 — koli içi serileri.</summary>
+    public List<SasSerialDto> SapSerialsBoxInside { get; set; } = [];
+
+    public string? SapSerialsError { get; set; }
+
+    public int SapSerialsCount => SapSerialsBoxTop.Count + SapSerialsBoxInside.Count;
 
     public List<BarcodePrintListItemViewModel> RecentPrints { get; set; } = [];
 
@@ -90,6 +106,8 @@ public class SasDetailViewModel
         MaterialNumber = line.MaterialNumber;
         MaterialDescription = line.MaterialDescription;
         PackageQuantity = line.PackageQuantity;
+        OriginalPackageQuantity = line.PackageQuantity;
+        OrderQuantity = line.Quantity;
         if (string.IsNullOrWhiteSpace(VendorCode) && !string.IsNullOrWhiteSpace(line.VendorCode))
         {
             VendorCode = line.VendorCode.Trim();
@@ -100,14 +118,33 @@ public class SasDetailViewModel
             CustomerName = line.CustomerName.Trim();
         }
 
-        if (KoliUstuQuantity <= 0)
+        // Doqu: paket düşürülebilir. MENGE < SAP paket ise (örn. 1/5) otomatik düşür;
+        // aksi halde koli üstü katı olamaz, koli içi SAP Max:0 verir.
+        if (line.Quantity > 0 && PackageQuantity > line.Quantity)
         {
-            KoliUstuQuantity = line.PackageQuantity > 0 ? line.PackageQuantity : 1;
+            PackageQuantity = line.Quantity;
         }
 
+        // Doqu: koli üstü varsayılan = MENGE (paket katıysa), değilse en büyük kat ≤ MENGE.
+        if (KoliUstuQuantity <= 0 && PackageQuantity > 0 && line.Quantity > 0)
+        {
+            var menge = line.Quantity;
+            var paket = PackageQuantity;
+            if (menge % paket == 0)
+            {
+                KoliUstuQuantity = menge;
+            }
+            else
+            {
+                var multiples = Math.Floor(menge / paket) * paket;
+                KoliUstuQuantity = multiples > 0 ? multiples : 0;
+            }
+        }
+
+        // Doqu: koli içi MENGE/kat zorunlu değil; varsayılan 1.
         if (KoliIciQuantity <= 0)
         {
-            KoliIciQuantity = line.PackageQuantity > 0 ? line.PackageQuantity : 1;
+            KoliIciQuantity = 1;
         }
     }
 }

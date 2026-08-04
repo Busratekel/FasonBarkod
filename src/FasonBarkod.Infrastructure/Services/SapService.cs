@@ -4,6 +4,7 @@ using FasonBarkod.Infrastructure.Configuration;
 using FasonBarkod.Infrastructure.Data;
 using FasonBarkod.Infrastructure.Sap;
 using FasonBarkod.Infrastructure.Sap.Rfc;
+using FasonBarkod.Infrastructure.Sap.Soap;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,6 +17,7 @@ namespace FasonBarkod.Infrastructure.Services;
 public class SapService(
     ApplicationDbContext context,
     ISapConnectionFactory connectionFactory,
+    ISapBarcodeSoapClient barcodeSoapClient,
     IOptions<SapOptions> sapOptions,
     ILogger<SapService> logger) : ISapService
 {
@@ -437,6 +439,36 @@ public class SapService(
                 : "SAP bağlantısı kapalı.",
             [$"MOCK-R-{request.SerialNumber.Trim()}-{DateTime.UtcNow:yyyyMMddHHmmss}"],
             null));
+    }
+
+    public async Task<SasSerialListResult> ListSasSerialsAsync(
+        string purchaseOrderNo,
+        string lineNo,
+        bool boxInside,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(purchaseOrderNo) || string.IsNullOrWhiteSpace(lineNo))
+        {
+            return new SasSerialListResult(false, "SAS no ve kalem zorunludur.", []);
+        }
+
+        // Doqu frmGetBarcodesSas: GetSAPSASBarcodeSerials (ASMX).
+        // RFC_READ_TABLE ZMMIST14000 — OPTIONS parse hatası (dynamic entry); kullanılmaz.
+        if (barcodeSoapClient.IsConfigured)
+        {
+            return await barcodeSoapClient.GetSasSerialsAsync(
+                purchaseOrderNo,
+                lineNo,
+                boxInside,
+                cancellationToken);
+        }
+
+        return new SasSerialListResult(
+            false,
+            "Seri listesi için SapBarcodeSoap gerekli (GetSAPSASBarcodeSerials). " +
+            "Api appsettings: SapBarcodeSoap.Enabled=true ve UserName/Password " +
+            "(veya Sap.User / Sap.Password).",
+            []);
     }
 
     private async Task<IReadOnlyList<SasLineDto>> GetMockSasLinesAsync(

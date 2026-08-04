@@ -3,6 +3,7 @@ using FasonBarkod.Infrastructure.Configuration;
 using FasonBarkod.Infrastructure.Data;
 using FasonBarkod.Infrastructure.Printing;
 using FasonBarkod.Infrastructure.Sap;
+using FasonBarkod.Infrastructure.Sap.Soap;
 using FasonBarkod.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -19,6 +20,7 @@ public static class DependencyInjection
         services.AddDbContext<ApplicationDbContext>(options => ConfigureDbContext(options, connectionString));
 
         services.Configure<SapOptions>(options => { });
+        services.Configure<SapBarcodeSoapOptions>(options => { });
         services.Configure<LdapOptions>(options => { });
         services.Configure<PrinterOptions>(options => { });
 
@@ -34,6 +36,7 @@ public static class DependencyInjection
         services.AddDbContext<ApplicationDbContext>(options => ConfigureDbContext(options, connectionString));
 
         services.Configure<SapOptions>(configuration.GetSection(SapOptions.SectionName));
+        services.Configure<SapBarcodeSoapOptions>(configuration.GetSection(SapBarcodeSoapOptions.SectionName));
         services.Configure<LdapOptions>(configuration.GetSection(LdapOptions.SectionName));
         services.Configure<PrinterOptions>(configuration.GetSection(PrinterOptions.SectionName));
 
@@ -52,6 +55,7 @@ public static class DependencyInjection
     {
         services.AddMemoryCache();
         services.AddScoped<ISapConnectionFactory, SapConnectionFactory>();
+        services.AddScoped<ISapBarcodeSoapClient, SapBarcodeSoapClient>();
         services.AddScoped<IOrderService, OrderService>();
         services.AddScoped<IBarcodeService, BarcodeService>();
         services.AddScoped<ISapService, SapService>();

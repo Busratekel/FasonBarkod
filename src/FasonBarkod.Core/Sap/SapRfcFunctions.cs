@@ -18,6 +18,9 @@ public static class SapRfcFunctions
 
         public const string Reprint = "ZMM_N_SAS_B_T";
 
+        /// <summary>GetSAPSASBarcodeSerials — Doqu ASMX (RFC_READ_TABLE kullanılmaz).</summary>
+        public const string SerialsSoap = "GetSAPSASBarcodeSerials";
+
     }
 
 }

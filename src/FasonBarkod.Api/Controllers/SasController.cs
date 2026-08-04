@@ -25,10 +25,10 @@ public class SasController(ISapService sapService) : ControllerBase
             return NotFound(new
             {
                 error = string.IsNullOrWhiteSpace(orderNo)
-                    ? "SAS listesi boş. SAP bu cari/filtre ile kalem döndürmedi."
-                    : $"SAS bulunamadı: {orderNo}. SAP bağlantısı başarılı ancak ZMM_N_SAS_L bu numara/cari ile kalem döndürmedi.",
+                    ? "Listelenecek SAS bulunamadı."
+                    : $"“{orderNo}” numaralı SAS bulunamadı. Numarayı kontrol edin.",
                 sapMessage,
-                hint = $"SE37: ZMM_N_SAS_L IS_EBELN={(string.IsNullOrWhiteSpace(orderNo) ? "(boş)" : orderNo)}, I_KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(10 boşluk)" : vendorCode)}",
+                hint = $"SE37 ZMM_N_SAS_L EBELN={(string.IsNullOrWhiteSpace(orderNo) ? "(boş)" : orderNo)} KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(boş)" : vendorCode)}",
                 diagnostic = $"http://localhost:5135/saphealth/sas-test?allowEmptyOrder=true&orderNo={Uri.EscapeDataString(orderNo ?? string.Empty)}&vendorCode={Uri.EscapeDataString(vendorCode ?? string.Empty)}"
             });
         }
@@ -56,14 +56,35 @@ public class SasController(ISapService sapService) : ControllerBase
 
             return NotFound(new
             {
-                error = $"SAS bulunamadı: {orderNo}. SAP bağlantısı başarılı ancak ZMM_N_SAS_L bu numara/cari ile kalem döndürmedi.",
+                error = $"“{orderNo}” numaralı SAS bulunamadı. Numarayı kontrol edin.",
                 sapMessage,
-                hint = $"SE37'de ZMM_N_SAS_L (kullanıcı 170RFC, client 100): IS_EBELN.EBELN={orderNo}, I_KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(10 boşluk)" : vendorCode)}. SE37'de veri geliyorsa ekran görüntüsünü paylaşın; gelmiyorsa SAS/cari test ortamında yok veya yetki eksik.",
+                hint = $"SE37 ZMM_N_SAS_L EBELN={orderNo} KUNNR={(string.IsNullOrWhiteSpace(vendorCode) ? "(boş)" : vendorCode)}",
                 diagnostic = $"http://localhost:5135/saphealth/sas-test?orderNo={Uri.EscapeDataString(orderNo)}&vendorCode={Uri.EscapeDataString(vendorCode ?? string.Empty)}"
             });
         }
 
         return Ok(result.Lines);
+    }
+
+    [HttpGet("{orderNo}/serials")]
+    public async Task<IActionResult> GetSerials(
+        string orderNo,
+        [FromQuery] string lineNo,
+        [FromQuery] bool boxInside = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(orderNo) || string.IsNullOrWhiteSpace(lineNo))
+        {
+            return BadRequest(new { error = "SAS no ve kalem (lineNo) zorunludur." });
+        }
+
+        var result = await sapService.ListSasSerialsAsync(orderNo, lineNo, boxInside, cancellationToken);
+        if (!result.Success && result.Serials.Count == 0)
+        {
+            return BadRequest(new { error = result.ErrorMessage ?? "Seri listesi alınamadı." });
+        }
+
+        return Ok(result);
     }
 
     [HttpPost("barcodes")]
@@ -76,9 +97,25 @@ public class SasController(ISapService sapService) : ControllerBase
             return BadRequest(new { error = "Miktar değerleri 0'dan büyük olmalıdır." });
         }
 
-        if (!PackageQuantityValidator.IsValidMultiple(request.PrintQuantity, request.PackageQuantity, request.LabelType))
+        var listResult = await sapService.ListSasAsync(request.PurchaseOrderNo, request.VendorCode, cancellationToken);
+        var line = listResult.Lines.FirstOrDefault(l =>
+            string.Equals(l.LineNo, request.LineNo?.Trim(), StringComparison.OrdinalIgnoreCase)
+            || (int.TryParse(l.LineNo, out var a) && int.TryParse(request.LineNo, out var b) && a == b));
+
+        var orderQty = line?.Quantity ?? 0;
+        var originalPackage = line is { PackageQuantity: > 0 }
+            ? line.PackageQuantity
+            : request.PackageQuantity;
+
+        var validationError = PackageQuantityValidator.ValidateNewPrint(
+            request.LabelType,
+            request.PrintQuantity,
+            request.PackageQuantity,
+            orderQty,
+            originalPackage);
+        if (!string.IsNullOrWhiteSpace(validationError))
         {
-            return BadRequest(new { error = PackageQuantityValidator.GetValidationError(request.LabelType) });
+            return BadRequest(new { error = validationError });
         }
 
         var result = await sapService.CreateBarcodeAsync(new SapBarcodeRequest(
@@ -110,16 +147,19 @@ public class SasController(ISapService sapService) : ControllerBase
             return BadRequest(new { error = "Seri numarası (SERNR) zorunludur." });
         }
 
-        if (request.PackageQuantity <= 0)
+        // Koli üstü reprint: PaketIci=0 (eski Doqu). Koli içi: paket miktarı > 0.
+        if (request.LabelType == LabelType.KoliIci && request.PackageQuantity <= 0)
         {
-            return BadRequest(new { error = "Paket miktarı 0'dan büyük olmalıdır." });
+            return BadRequest(new { error = "Koli içi tekrar basımda paket miktarı 0'dan büyük olmalıdır." });
         }
+
+        var packageQty = request.LabelType == LabelType.KoliUstu ? 0 : request.PackageQuantity;
 
         var result = await sapService.ReprintBarcodeAsync(new SapReprintRequest(
             BarcodeModuleType.Sas,
             request.PurchaseOrderNo,
             request.LineNo,
-            request.PackageQuantity,
+            packageQty,
             request.LabelType,
             request.SerialNumber,
             VendorCode: request.VendorCode), cancellationToken);
