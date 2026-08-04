@@ -1,4 +1,5 @@
 using FasonBarkod.Core.Entities;
+using FasonBarkod.Core.Security;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -9,6 +10,8 @@ namespace FasonBarkod.Infrastructure.Data;
 
 public static class DbInitializer
 {
+    public const string DefaultCompanyCode = "DEFAULT";
+
     public static async Task InitializeAsync(IServiceProvider services)
     {
         using var scope = services.CreateScope();
@@ -36,8 +39,79 @@ public static class DbInitializer
             throw;
         }
 
-        // İlk kurulum: yalnızca hiç kullanıcı yoksa ve Bootstrap ayarları doluysa admin oluşturur.
+        await EnsureRolesAndCompaniesAsync(scope.ServiceProvider, logger);
         await TryBootstrapAdminAsync(scope.ServiceProvider, logger);
+    }
+
+    private static async Task EnsureRolesAndCompaniesAsync(IServiceProvider services, ILogger logger)
+    {
+        var context = services.GetRequiredService<ApplicationDbContext>();
+        var userManager = services.GetService<UserManager<ApplicationUser>>();
+        var roleManager = services.GetService<RoleManager<IdentityRole>>();
+        if (userManager is null || roleManager is null)
+        {
+            return;
+        }
+
+        foreach (var role in AppRoles.All)
+        {
+            if (!await roleManager.RoleExistsAsync(role))
+            {
+                await roleManager.CreateAsync(new IdentityRole(role));
+                logger.LogInformation("Rol oluşturuldu: {Role}", role);
+            }
+        }
+
+        var defaultCompany = await context.Companies
+            .FirstOrDefaultAsync(c => c.Code == DefaultCompanyCode);
+        if (defaultCompany is null)
+        {
+            defaultCompany = new Company
+            {
+                Name = "Varsayılan Şirket",
+                Code = DefaultCompanyCode,
+                IsActive = true,
+                CreatedAtUtc = DateTime.UtcNow
+            };
+            context.Companies.Add(defaultCompany);
+            await context.SaveChangesAsync();
+            logger.LogInformation("Varsayılan şirket oluşturuldu (Code={Code}).", DefaultCompanyCode);
+        }
+
+        var unassigned = await userManager.Users
+            .Where(u => u.CompanyId == null)
+            .ToListAsync();
+        if (unassigned.Count > 0)
+        {
+            foreach (var user in unassigned)
+            {
+                var roles = await userManager.GetRolesAsync(user);
+                // SuperAdmin şirket dışı kalabilir; diğerleri varsayılana bağlanır.
+                if (roles.Contains(AppRoles.SuperAdmin) && !roles.Contains(AppRoles.Admin) && !roles.Contains(AppRoles.Operator))
+                {
+                    continue;
+                }
+
+                user.CompanyId = defaultCompany.Id;
+                await userManager.UpdateAsync(user);
+            }
+
+            logger.LogInformation("{Count} kullanıcı varsayılan şirkete bağlandı.", unassigned.Count);
+        }
+
+        var superAdmins = await userManager.GetUsersInRoleAsync(AppRoles.SuperAdmin);
+        if (superAdmins.Count == 0)
+        {
+            var admins = await userManager.GetUsersInRoleAsync(AppRoles.Admin);
+            var promote = admins.FirstOrDefault(a => a.IsActive) ?? admins.FirstOrDefault();
+            if (promote is not null)
+            {
+                await userManager.AddToRoleAsync(promote, AppRoles.SuperAdmin);
+                logger.LogInformation(
+                    "Sistemde SuperAdmin yoktu; mevcut Admin yükseltildi: {Email}",
+                    promote.Email);
+            }
+        }
     }
 
     private static async Task TryBootstrapAdminAsync(IServiceProvider services, ILogger logger)
@@ -45,8 +119,9 @@ public static class DbInitializer
         var userManager = services.GetService<UserManager<ApplicationUser>>();
         var roleManager = services.GetService<RoleManager<IdentityRole>>();
         var configuration = services.GetService<IConfiguration>();
+        var context = services.GetService<ApplicationDbContext>();
 
-        if (userManager is null || roleManager is null || configuration is null)
+        if (userManager is null || roleManager is null || configuration is null || context is null)
         {
             return;
         }
@@ -68,15 +143,8 @@ public static class DbInitializer
             return;
         }
 
-        if (!await roleManager.RoleExistsAsync("Admin"))
-        {
-            await roleManager.CreateAsync(new IdentityRole("Admin"));
-        }
-
-        if (!await roleManager.RoleExistsAsync("Operator"))
-        {
-            await roleManager.CreateAsync(new IdentityRole("Operator"));
-        }
+        var defaultCompany = await context.Companies
+            .FirstAsync(c => c.Code == DefaultCompanyCode);
 
         var user = new ApplicationUser
         {
@@ -84,7 +152,8 @@ public static class DbInitializer
             Email = email,
             EmailConfirmed = true,
             FullName = string.IsNullOrWhiteSpace(fullName) ? "Sistem Yöneticisi" : fullName,
-            IsActive = true
+            IsActive = true,
+            CompanyId = defaultCompany.Id
         };
 
         var result = await userManager.CreateAsync(user, password);
@@ -96,7 +165,10 @@ public static class DbInitializer
             return;
         }
 
-        await userManager.AddToRoleAsync(user, "Admin");
-        logger.LogInformation("İlk admin oluşturuldu: {Email}. Bootstrap şifresini yapılandırmadan kaldırın.", email);
+        await userManager.AddToRoleAsync(user, AppRoles.Admin);
+        await userManager.AddToRoleAsync(user, AppRoles.SuperAdmin);
+        logger.LogInformation(
+            "İlk SuperAdmin oluşturuldu: {Email}. Bootstrap şifresini yapılandırmadan kaldırın.",
+            email);
     }
 }

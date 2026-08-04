@@ -65,13 +65,24 @@
                                 </li>
                             }
 
-                            @if (User.IsInRole("Admin"))
+                            @if (User.IsInRole("Admin") || User.IsInRole("SuperAdmin"))
                             {
                                 <li class="nav-item">
                                     <a class="nav-link text-white" asp-controller="LabelTemplates" asp-action="Index">Etiket Tasarımları</a>
                                 </li>
+                            }
+
+                            @if (User.IsInRole("Admin") || User.IsInRole("SuperAdmin") || User.IsInRole("Operator"))
+                            {
                                 <li class="nav-item">
                                     <a class="nav-link text-white" asp-controller="Users" asp-action="Index">Kullanıcılar</a>
+                                </li>
+                            }
+
+                            @if (User.IsInRole("SuperAdmin"))
+                            {
+                                <li class="nav-item">
+                                    <a class="nav-link text-white" asp-controller="Companies" asp-action="Index">Şirketler</a>
                                 </li>
                             }
 

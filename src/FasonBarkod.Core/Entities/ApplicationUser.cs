@@ -10,7 +10,15 @@ public class ApplicationUser : IdentityUser
 
     /// <summary>
     /// SAP satıcı / cari kodu (LIFNR). Operatör yalnızca bu koda ait SAS'ları görür.
-    /// Admin için boş bırakılabilir (tüm cariler).
+    /// Admin için boş bırakılabilir (şirket içi tüm cariler).
     /// </summary>
     public string? VendorCode { get; set; }
+
+    /// <summary>
+    /// Kullanıcının şirketi. SuperAdmin için boş olabilir (platform düzeyi).
+    /// Admin/Operator için zorunlu.
+    /// </summary>
+    public int? CompanyId { get; set; }
+
+    public Company? Company { get; set; }
 }

@@ -2,6 +2,7 @@
 @{
     ViewData["Title"] = "Yeni Kullanıcı";
     var roles = (ViewBag.Roles as string[]) ?? ["Admin", "Operator"];
+    var isSuperAdmin = ViewBag.IsSuperAdmin as bool? == true;
 }
 
 <div class="mb-3">
@@ -26,6 +27,26 @@
                 <input asp-for="FullName" class="form-control" />
                 <span asp-validation-for="FullName" class="text-danger small"></span>
             </div>
+
+            @if (isSuperAdmin)
+            {
+                <div class="col-12">
+                    <label asp-for="CompanyId" class="form-label"></label>
+                    <select asp-for="CompanyId" class="form-select" asp-items="ViewBag.Companies">
+                        <option value="">— Şirket seçin —</option>
+                    </select>
+                    <div class="form-text">SuperAdmin için şirket boş bırakılabilir.</div>
+                    <span asp-validation-for="CompanyId" class="text-danger small"></span>
+                </div>
+            }
+            else
+            {
+                <input type="hidden" asp-for="CompanyId" />
+                <div class="col-12">
+                    <label class="form-label">Şirket</label>
+                    <input class="form-control" value="@(ViewBag.CompanyName as string ?? "")" disabled />
+                </div>
+            }
 
             <div class="col-12">
                 <label asp-for="VendorCode" class="form-label"></label>

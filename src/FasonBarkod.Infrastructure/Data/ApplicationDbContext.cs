@@ -17,14 +17,28 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     public DbSet<LabelTemplate> LabelTemplates => Set<LabelTemplate>();
 
+    public DbSet<Company> Companies => Set<Company>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        builder.Entity<Company>(entity =>
+        {
+            entity.Property(e => e.Name).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Code).HasMaxLength(50).IsRequired();
+            entity.HasIndex(e => e.Code).IsUnique();
+        });
 
         builder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(e => e.FullName).HasMaxLength(100);
             entity.Property(e => e.VendorCode).HasMaxLength(20);
+            entity.HasOne(e => e.Company)
+                .WithMany(c => c.Users)
+                .HasForeignKey(e => e.CompanyId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(e => e.CompanyId);
         });
 
         builder.Entity<SalesOrderLine>(entity =>
