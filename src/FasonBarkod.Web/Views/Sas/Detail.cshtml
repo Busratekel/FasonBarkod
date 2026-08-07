@@ -11,23 +11,18 @@
     var pkg = Model.PackageQuantity;
     var printedBox = selected?.PrintedBoxCount ?? 0;
     var printedInside = selected?.PrintedInsideBoxCount ?? 0;
-    // Koli içi kota hesabında paket>MENGE ise efektif paket = MENGE (SAP'ye de böyle gider).
-    var pkgForInside = orderQty > 0 && pkg > orderQty ? orderQty : pkg;
-    var remainingInside = PackageQuantityValidator.RemainingInsideQuantity(
-        orderQty, pkgForInside, printedBox, printedInside);
     var packageExceedsOrder = orderQty > 0 && pkg > orderQty;
-    var koliIciBlocked = remainingInside is 0;
+    var remainingBoxTop = PackageQuantityValidator.RemainingBoxTopQuantity(orderQty, pkg, printedBox);
     var koliUstuValid = selected is not null && pkg > 0 && Model.KoliUstuQuantity > 0
         && Model.KoliUstuQuantity % pkg == 0
-        && (orderQty <= 0 || Model.KoliUstuQuantity <= orderQty)
         && (originalPkg <= 0 || pkg <= originalPkg)
-        && !packageExceedsOrder;
+        && !packageExceedsOrder
+        && remainingBoxTop is not 0
+        && (remainingBoxTop is null || Model.KoliUstuQuantity <= remainingBoxTop.Value);
     var koliUstuCount = koliUstuValid ? (int)(Model.KoliUstuQuantity / pkg) : 0;
-    // Koli içi: adet ≥ 1, paket dolu, SAP kalan kota > 0.
+    // Doqu koli içi: adet ≥ 1, paket > 0 — yerel kota yok.
     var koliIciValid = selected is not null && pkg > 0 && Model.KoliIciQuantity >= 1
-        && (originalPkg <= 0 || pkg <= originalPkg)
-        && !koliIciBlocked
-        && (remainingInside is null || Model.KoliIciQuantity <= remainingInside.Value);
+        && (originalPkg <= 0 || pkg <= originalPkg);
     var koliIciCount = koliIciValid ? (int)Model.KoliIciQuantity : 0;
     var canReprint = selected is not null && (
         selected.PrintedBoxCount > 0
@@ -192,26 +187,26 @@
                         <dd class="col-sm-7">@selected.PrintedBoxCount</dd>
                         <dt class="col-sm-5">Basılan Koli İçi</dt>
                         <dd class="col-sm-7">@selected.PrintedInsideBoxCount</dd>
-                        <dt class="col-sm-5">Koli üstü üst sınır</dt>
+                        <dt class="col-sm-5">Koli üstü kalan</dt>
                         <dd class="col-sm-7">
-                            <strong>@selected.Quantity.ToString("N0")</strong>
-                            <span class="text-muted small">(MENGE — basılacak ≤ bu, paket katı)</span>
-                        </dd>
-                        <dt class="col-sm-5">Koli içi kalan</dt>
-                        <dd class="col-sm-7">
-                            @if (remainingInside is null)
+                            @if (remainingBoxTop is null)
                             {
                                 <span class="text-muted">—</span>
                             }
-                            else if (remainingInside == 0)
+                            else if (remainingBoxTop == 0)
                             {
                                 <strong class="text-danger">0</strong>
-                                <span class="text-muted small">(basılamaz)</span>
+                                <span class="text-muted small">(MENGE − basılan koli × paket)</span>
                             }
                             else
                             {
-                                <strong>@remainingInside.Value.ToString("N0")</strong>
+                                <strong>@remainingBoxTop.Value.ToString("N0")</strong>
+                                <span class="text-muted small">(MENGE − basılan koli × paket)</span>
                             }
+                        </dd>
+                        <dt class="col-sm-5">Koli içi</dt>
+                        <dd class="col-sm-7">
+                            <span class="text-muted small">Adet ≥ 1 (kota SAP’de; üst basınca tablodan Reprint)</span>
                         </dd>
                     </dl>
                 }
@@ -262,7 +257,6 @@
                         <input type="hidden" id="sapOrderQuantity" value="@orderQty.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
                         <input type="hidden" id="sapPrintedBoxCount" value="@printedBox.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
                         <input type="hidden" id="sapPrintedInsideCount" value="@printedInside.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
-                        <input type="hidden" id="sapRemainingInside" value="@(remainingInside?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")" />
 
                         <div class="row g-3 align-items-end mb-3">
                             <div class="col-md-5">
@@ -316,13 +310,21 @@
                                     <input asp-for="KoliUstuQuantity" id="koliUstuQtyInput" class="form-control mb-2" data-val="false" step="any" min="0.0001"
                                            data-qty-rule="box-top" />
                                     <div id="koliUstuFeedback" class="form-text mb-2">
-                                        @if (koliUstuValid)
+                                        @if (remainingBoxTop is 0)
                                         {
-                                            <text>→ @koliUstuCount Adet koli üstü etiketi (örn. paket 10, miktar 10 → 1 etiket)</text>
+                                            <span class="text-danger">Koli üstü basılamaz (sipariş kotası dolmuş: @orderQty.ToString("N0") − @printedBox × @pkg.ToString("N0")).</span>
+                                        }
+                                        else if (koliUstuValid)
+                                        {
+                                            <text>→ @koliUstuCount Adet koli üstü etiketi (kalan en fazla @remainingBoxTop!.Value.ToString("N0"))</text>
                                         }
                                         else if (pkg > 0 && Model.KoliUstuQuantity > 0 && Model.KoliUstuQuantity % pkg != 0)
                                         {
                                             <span class="text-danger">Girilen Değer, Paket Miktarının Katı Olmalıdır.!</span>
+                                        }
+                                        else if (remainingBoxTop is > 0 && Model.KoliUstuQuantity > remainingBoxTop)
+                                        {
+                                            <span class="text-danger">Koli üstü en fazla @remainingBoxTop.Value.ToString("N0") basılabilir (kalan kota).</span>
                                         }
                                         else if (orderQty > 0 && Model.KoliUstuQuantity > orderQty)
                                         {
@@ -334,6 +336,10 @@
                                         }
                                     </div>
                                     <button type="submit" id="koliUstuSubmitBtn" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!koliUstuValid)">Koli Üstü Barkodu</button>
+                                    <!-- <div class="form-text small mt-1">
+                                        Koli üstü basılınca SAP’nin tabloya yazdığı koli içi serileri
+                                        (<code>Serials KoliIci=X</code> + Reprint) otomatik basılır.
+                                    </div> -->
                                 </form>
                             </div>
 
@@ -351,24 +357,11 @@
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <label asp-for="KoliIciQuantity" class="form-label"></label>
                                     <input asp-for="KoliIciQuantity" id="koliIciQtyInput" class="form-control mb-2" data-val="false" step="any" min="1"
-                                           data-qty-rule="box-inside"
-                                           disabled="@koliIciBlocked" />
+                                           data-qty-rule="box-inside" />
                                     <div id="koliIciFeedback" class="form-text mb-2">
-                                        @if (koliIciBlocked)
+                                        @if (koliIciValid)
                                         {
-                                            <span class="text-danger">Koli içi basılamaz (kalan kota: 0).</span>
-                                        }
-                                        else if (koliIciValid)
-                                        {
-                                            <text>→ @koliIciCount adet koli içi etiketi@(remainingInside is > 0 ? $" (kalan en fazla {remainingInside.Value:0.####})" : "")</text>
-                                            @if (packageExceedsOrder)
-                                            {
-                                                <span class="text-muted d-block">Not: formdaki paket @pkg.ToString("N0"); SAP'ye koli içi için @pkgForInside.ToString("N0") gider.</span>
-                                            }
-                                        }
-                                        else if (remainingInside is > 0 && Model.KoliIciQuantity > remainingInside)
-                                        {
-                                            <span class="text-danger">Kalan koli içi kotası en fazla @remainingInside.Value.ToString("N0").</span>
+                                            <text>→ @koliIciCount adet (ZMMIST14000’den Reprint; yeni Print değil)</text>
                                         }
                                         else
                                         {
@@ -376,8 +369,11 @@
                                         }
                                     </div>
                                     <button type="submit" id="koliIciSubmitBtn" class="btn btn-warning w-100 sas-submit-btn"
-                                            disabled="@(!koliIciValid)"
-                                            title="@(koliIciBlocked ? "Kalan koli içi kotası 0" : null)">Koli İçi Barkodu</button>
+                                            disabled="@(!koliIciValid)">Koli İçi Barkodu</button>
+                                    <!-- <div class="form-text small mt-1">
+                                        Masaüstü gibi: tablodaki koli içi SERNR’ler basılır.
+                                        Yeni SAP Print kullanılmaz (Max:0 sebebi buydu).
+                                    </div> -->
                                 </form>
                             </div>
                         </div>
@@ -398,7 +394,7 @@
                         <div asp-validation-summary="All" class="text-danger small mb-3 @(ViewData.ModelState.IsValid ? "d-none" : "")"></div>
 
                         <p class="text-muted small mb-2">
-                            SAP <code>ZMMIST14000</code> serilerinden seçip aynı SERNR ile tekrar basar.
+                            Serileri işaretleyip aynı SERNR ile tekrar basar. Birden fazla seçebilirsiniz.
                         </p>
 
                         @if (!string.IsNullOrWhiteSpace(Model.SapSerialsError) && Model.SapSerialsCount == 0)
@@ -408,11 +404,15 @@
 
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <div class="fw-semibold small mb-1">Koli üstü — Seri No</div>
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <div class="fw-semibold small">Koli üstü — Seri No</div>
+                                    <button type="button" class="btn btn-link btn-sm p-0 sas-serial-select-all" data-kind="top">Tümünü seç</button>
+                                </div>
                                 <div class="table-responsive border" style="max-height: 220px; overflow-y: auto;">
                                     <table class="table table-sm table-hover align-middle mb-0">
                                         <thead class="table-light sticky-top">
                                             <tr>
+                                                <th style="width:2.25rem;"></th>
                                                 <th>Seri No</th>
                                                 <th style="width:4rem;">Okundu</th>
                                             </tr>
@@ -420,14 +420,18 @@
                                         <tbody id="sapSerialsBoxTopBody">
                                         @if (Model.SapSerialsBoxTop.Count == 0)
                                         {
-                                            <tr><td colspan="2" class="text-muted small">Koli üstü seri yok.</td></tr>
+                                            <tr><td colspan="3" class="text-muted small">Koli üstü seri yok.</td></tr>
                                         }
                                         else
                                         {
                                             foreach (var s in Model.SapSerialsBoxTop)
                                             {
-                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase);
+                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase)
+                                                    || Model.SerialNumbers.Any(x => string.Equals(x, s.SerialNumber, StringComparison.OrdinalIgnoreCase));
                                                 <tr class="sas-serial-row @(sel ? "table-warning" : "")" data-sernr="@s.SerialNumber" data-kind="top" style="cursor:pointer;">
+                                                    <td>
+                                                        <input type="checkbox" class="form-check-input sas-serial-check" value="@s.SerialNumber" data-kind="top" @(sel ? "checked" : null) />
+                                                    </td>
                                                     <td class="font-monospace fw-semibold">@s.SerialNumber</td>
                                                     <td></td>
                                                 </tr>
@@ -436,13 +440,18 @@
                                         </tbody>
                                     </table>
                                 </div>
+                                <div class="form-text small mt-1"><span id="sasTopSelectedCount">0</span> seçili</div>
                             </div>
                             <div class="col-md-6">
-                                <div class="fw-semibold small mb-1">Koli içi — Seri No</div>
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <div class="fw-semibold small">Koli içi — Seri No</div>
+                                    <button type="button" class="btn btn-link btn-sm p-0 sas-serial-select-all" data-kind="inside">Tümünü seç</button>
+                                </div>
                                 <div class="table-responsive border" style="max-height: 220px; overflow-y: auto;">
                                     <table class="table table-sm table-hover align-middle mb-0">
                                         <thead class="table-light sticky-top">
                                             <tr>
+                                                <th style="width:2.25rem;"></th>
                                                 <th>Seri No</th>
                                                 <th style="width:4rem;">Okundu</th>
                                             </tr>
@@ -450,14 +459,18 @@
                                         <tbody id="sapSerialsBoxInsideBody">
                                         @if (Model.SapSerialsBoxInside.Count == 0)
                                         {
-                                            <tr><td colspan="2" class="text-muted small">Koli içi seri yok.</td></tr>
+                                            <tr><td colspan="3" class="text-muted small">Koli içi seri yok.</td></tr>
                                         }
                                         else
                                         {
                                             foreach (var s in Model.SapSerialsBoxInside)
                                             {
-                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase);
+                                                var sel = string.Equals(s.SerialNumber, Model.SerialNumber, StringComparison.OrdinalIgnoreCase)
+                                                    || Model.SerialNumbers.Any(x => string.Equals(x, s.SerialNumber, StringComparison.OrdinalIgnoreCase));
                                                 <tr class="sas-serial-row @(sel ? "table-warning" : "")" data-sernr="@s.SerialNumber" data-kind="inside" style="cursor:pointer;">
+                                                    <td>
+                                                        <input type="checkbox" class="form-check-input sas-serial-check" value="@s.SerialNumber" data-kind="inside" @(sel ? "checked" : null) />
+                                                    </td>
                                                     <td class="font-monospace fw-semibold">@s.SerialNumber</td>
                                                     <td></td>
                                                 </tr>
@@ -466,14 +479,16 @@
                                         </tbody>
                                     </table>
                                 </div>
+                                <div class="form-text small mt-1"><span id="sasInsideSelectedCount">0</span> seçili</div>
                             </div>
                         </div>
 
                         <input type="hidden" asp-for="SerialNumber" id="serialNumberInput" class="sas-sernr-hidden" />
+                        <div id="sasSerialNumbersFields" class="d-none"></div>
 
                         <div class="row g-3">
                             <div class="col-md-6">
-                                <form asp-action="ReprintKoliUstu" method="post" class="sas-reprint-form" novalidate>
+                                <form asp-action="ReprintKoliUstu" method="post" class="sas-reprint-form" data-reprint-kind="top" novalidate>
                                     @Html.AntiForgeryToken()
                                     <input type="hidden" asp-for="PurchaseOrderNo" />
                                     <input type="hidden" asp-for="VendorCode" />
@@ -483,11 +498,12 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
+                                    <div class="sas-reprint-serials"></div>
                                     <button type="submit" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli Üstü Barkodu</button>
                                 </form>
                             </div>
                             <div class="col-md-6">
-                                <form asp-action="ReprintKoliIci" method="post" class="sas-reprint-form" novalidate>
+                                <form asp-action="ReprintKoliIci" method="post" class="sas-reprint-form" data-reprint-kind="inside" novalidate>
                                     @Html.AntiForgeryToken()
                                     <input type="hidden" asp-for="PurchaseOrderNo" />
                                     <input type="hidden" asp-for="VendorCode" />
@@ -497,6 +513,7 @@
                                     <input type="hidden" asp-for="MaterialDescription" />
                                     <input type="hidden" asp-for="PackageQuantity" class="sas-package-qty-hidden" />
                                     <input type="hidden" asp-for="SerialNumber" class="sas-sernr-hidden" />
+                                    <div class="sas-reprint-serials"></div>
                                     <button type="submit" class="btn btn-warning w-100 sas-submit-btn" disabled="@(!canReprint)">Koli İçi Barkodu</button>
                                 </form>
                             </div>
@@ -611,6 +628,52 @@ else if (selected is not null)
                 serialFields().forEach(f => f.value = serialInput.value);
             }
 
+            function selectedSerials(kind) {
+                return Array.from(document.querySelectorAll('.sas-serial-check[data-kind="' + kind + '"]:checked'))
+                    .map(function (cb) { return String(cb.value || '').trim(); })
+                    .filter(Boolean);
+            }
+
+            function syncSelectedCounts() {
+                const topCount = selectedSerials('top').length;
+                const insideCount = selectedSerials('inside').length;
+                const topEl = document.getElementById('sasTopSelectedCount');
+                const insideEl = document.getElementById('sasInsideSelectedCount');
+                if (topEl) topEl.textContent = String(topCount);
+                if (insideEl) insideEl.textContent = String(insideCount);
+            }
+
+            function fillReprintSerialFields(form, serials) {
+                const holder = form.querySelector('.sas-reprint-serials');
+                if (!holder) return;
+                holder.innerHTML = '';
+                serials.forEach(function (sernr) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'SerialNumbers';
+                    input.value = sernr;
+                    holder.appendChild(input);
+                });
+                if (serials.length > 0) {
+                    form.querySelectorAll('.sas-sernr-hidden').forEach(function (f) {
+                        f.value = serials[0];
+                    });
+                }
+            }
+
+            function toggleSerialRow(row, forceChecked) {
+                const check = row.querySelector('.sas-serial-check');
+                if (!check) return;
+                check.checked = typeof forceChecked === 'boolean' ? forceChecked : !check.checked;
+                row.classList.toggle('table-warning', check.checked);
+                const checked = selectedSerials(check.getAttribute('data-kind') || 'top');
+                if (serialInput) {
+                    serialInput.value = checked.length > 0 ? checked[0] : '';
+                }
+                syncSerialNumber();
+                syncSelectedCounts();
+            }
+
             const originalPkgEl = document.getElementById('sapOriginalPackageQuantity');
             const orderQtyEl = document.getElementById('sapOrderQuantity');
             const printedBoxEl = document.getElementById('sapPrintedBoxCount');
@@ -622,15 +685,11 @@ else if (selected is not null)
             const printedInside = () => parseFloat(printedInsideEl ? printedInsideEl.value : '0') || 0;
 
             function remainingInsideQty(pkg) {
-                const menge = orderQty();
-                if (menge <= 0) return null;
-                // Koli içi: paket>MENGE ise efektif paket = MENGE.
-                const p = pkg > menge ? menge : (pkg > 0 ? pkg : 0);
-                const rem = menge - (printedBox() * p) - printedInside();
-                return rem < 0 ? 0 : rem;
+                // Yerel kota yok; Doqu kuralı: kota SAP'de.
+                return null;
             }
 
-            // Doqu: koli üstü = paket katı + ≤ MENGE; koli içi = adet ≥ 1 ve kalan kota > 0.
+            // Doqu: koli üstü = paket katı + ≤ MENGE; koli içi = adet ≥ 1.
             function validateQtyInput(input, feedbackEl, submitBtn, rule) {
                 if (!input || !feedbackEl) return;
 
@@ -645,8 +704,19 @@ else if (selected is not null)
                 if (maxPkg > 0 && pkg > maxPkg) {
                     msg = '<span class="text-danger">Girilen Değer, Paket Miktarıdan Büyük Olamaz.</span>';
                 } else if (rule === 'box-top') {
+                    const rem = (function () {
+                        const menge = orderQty();
+                        if (menge <= 0) return null;
+                        const p = pkg > 0 ? pkg : 0;
+                        const r = menge - (printedBox() * p);
+                        return r < 0 ? 0 : r;
+                    })();
                     if (pkg <= 0 || qty <= 0) {
                         msg = '';
+                    } else if (rem === 0) {
+                        msg = '<span class="text-danger">Koli üstü basılamaz (sipariş kotası dolmuş).</span>';
+                    } else if (rem != null && qty > rem) {
+                        msg = '<span class="text-danger">Koli üstü en fazla ' + rem + ' basılabilir (kalan kota).</span>';
                     } else if (menge > 0 && qty > menge) {
                         msg = '<span class="text-danger">Sipariş miktarını (' + menge + ') aşamaz.</span>';
                     } else if (Math.abs(qty % pkg) > 1e-9) {
@@ -654,31 +724,18 @@ else if (selected is not null)
                     } else {
                         valid = true;
                         count = Math.round(qty / pkg);
-                        msg = '→ ' + count + ' Adet koli üstü etiketi';
+                        msg = '→ ' + count + ' Adet koli üstü etiketi' + (rem != null ? ' (kalan en fazla ' + rem + ')' : '');
                     }
                 } else if (rule === 'box-inside') {
-                    const rem = remainingInsideQty(pkg);
-                    if (rem === 0) {
-                        msg = '<span class="text-danger">Koli içi basılamaz (kalan kota: 0).</span>';
-                        input.disabled = true;
-                    } else if (pkg <= 0) {
+                    input.disabled = false;
+                    if (pkg <= 0) {
                         msg = '<span class="text-danger">Lütfen PaKet Miktarını Kontrol Ediniz.</span>';
-                        input.disabled = false;
                     } else if (qty < 1) {
                         msg = '<span class="text-danger">Sıfır Olamaz</span>';
-                        input.disabled = false;
-                    } else if (rem != null && qty > rem) {
-                        msg = '<span class="text-danger">Kalan koli içi kotası en fazla ' + rem + '.</span>';
-                        input.disabled = false;
                     } else {
                         valid = true;
                         count = Math.round(qty);
-                        var sapPkg = (menge > 0 && pkg > menge) ? menge : Math.min(pkg, qty);
-                        msg = '→ ' + count + ' adet koli içi etiketi' + (rem != null ? ' (kalan en fazla ' + rem + ')' : '');
-                        if (pkg !== sapPkg) {
-                            msg += '<span class="text-muted d-block">SAP\'ye paket ' + sapPkg + ' gidecek (sizin ' + count + ' adet isteğiniz).</span>';
-                        }
-                        input.disabled = false;
+                        msg = '→ ' + count + ' adet koli içi etiketi';
                     }
                 }
 
@@ -718,13 +775,14 @@ else if (selected is not null)
                 form.addEventListener('submit', function (e) {
                     const isReprint = form.classList.contains('sas-reprint-form');
                     if (isReprint) {
-                        syncSerialNumber();
-                        const sn = (document.getElementById('serialNumberInput') || {}).value || '';
-                        if (!String(sn).trim()) {
+                        const kind = form.getAttribute('data-reprint-kind') || 'top';
+                        const serials = selectedSerials(kind);
+                        if (serials.length === 0) {
                             e.preventDefault();
-                            alert('Önce listeden bir SERNR seçin.');
+                            alert('Önce listeden en az bir SERNR seçin.');
                             return;
                         }
+                        fillReprintSerialFields(form, serials);
                     }
 
                     const qtyInput = form.querySelector('[data-qty-rule]');
@@ -737,10 +795,17 @@ else if (selected is not null)
                         let valid = false;
                         if (maxPkg > 0 && pkg > maxPkg) valid = false;
                         else if (rule === 'box-top') {
-                            valid = pkg > 0 && qty > 0 && Math.abs(qty % pkg) < 1e-9 && (menge <= 0 || qty <= menge);
-                        }                         else if (rule === 'box-inside') {
-                            const rem = remainingInsideQty(pkg);
-                            valid = rem !== 0 && pkg > 0 && qty >= 1 && (rem == null || qty <= rem);
+                            const remTop = (function () {
+                                if (menge <= 0) return null;
+                                const p = pkg > 0 ? pkg : 0;
+                                const r = menge - (printedBox() * p);
+                                return r < 0 ? 0 : r;
+                            })();
+                            valid = pkg > 0 && qty > 0 && Math.abs(qty % pkg) < 1e-9
+                                && remTop !== 0
+                                && (remTop == null || qty <= remTop);
+                        } else if (rule === 'box-inside') {
+                            valid = pkg > 0 && qty >= 1;
                         }
                         if (!valid) {
                             e.preventDefault();
@@ -761,22 +826,36 @@ else if (selected is not null)
             const feedback = document.getElementById('print-feedback');
             if (feedback) feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-            function selectSernr(sernr) {
-                if (!sernr) return;
-                document.querySelectorAll('.sas-sernr-hidden, #serialNumberInput').forEach(function (f) {
-                    f.value = sernr;
-                });
-                document.querySelectorAll('tr.sas-serial-row').forEach(function (row) {
-                    row.classList.toggle('table-warning', row.getAttribute('data-sernr') === sernr);
-                });
-            }
-
             document.querySelectorAll('tr.sas-serial-row').forEach(function (row) {
-                row.addEventListener('click', function () {
-                    selectSernr(row.getAttribute('data-sernr'));
+                row.addEventListener('click', function (e) {
+                    if (e.target && e.target.classList && e.target.classList.contains('sas-serial-check')) {
+                        row.classList.toggle('table-warning', e.target.checked);
+                        const kind = e.target.getAttribute('data-kind') || 'top';
+                        const checked = selectedSerials(kind);
+                        if (serialInput) serialInput.value = checked.length > 0 ? checked[0] : '';
+                        syncSerialNumber();
+                        syncSelectedCounts();
+                        return;
+                    }
+                    toggleSerialRow(row);
                 });
             });
+
+            document.querySelectorAll('.sas-serial-select-all').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    const kind = btn.getAttribute('data-kind') || 'top';
+                    const checks = Array.from(document.querySelectorAll('.sas-serial-check[data-kind="' + kind + '"]'));
+                    const allChecked = checks.length > 0 && checks.every(function (c) { return c.checked; });
+                    checks.forEach(function (c) {
+                        const row = c.closest('tr.sas-serial-row');
+                        if (row) toggleSerialRow(row, !allChecked);
+                    });
+                    btn.textContent = allChecked ? 'Tümünü seç' : 'Seçimi kaldır';
+                });
+            });
+
             syncSerialNumber();
+            syncSelectedCounts();
         })();
 
         (function () {

@@ -15,6 +15,8 @@ public static class PackageQuantityValidator
     public const string BoxInsideZeroError = "Sıfır Olamaz";
     public const string PackageExceedsOrderError =
         "Paket miktarı sipariş miktarından büyük. Önce paketi sipariş miktarına (veya daha aza) düşürün.";
+    public const string BoxTopQuotaExhaustedError =
+        "Koli üstü basılamaz (sipariş kotası dolmuş).";
 
     /// <summary>
     /// Paket: &gt; 0 ve SAP satırındaki orijinal PAKET_MIKTARI’ndan büyük olamaz.
@@ -35,15 +37,35 @@ public static class PackageQuantityValidator
     }
 
     /// <summary>
-    /// Yeni koli üstü: basilacak &gt; 0, ≤ MENGE, paket katı.
-    /// Yeni koli içi: basilacak ≥ 1; paket ≤ MENGE olmalı (aksi halde SAP Max:0 verir).
+    /// Koli üstü kalan miktar: MENGE − (basılan koli × paket).
+    /// MENGE bilinmiyorsa null.
+    /// </summary>
+    public static decimal? RemainingBoxTopQuantity(
+        decimal orderQuantity,
+        decimal packageQuantity,
+        int printedBoxCount)
+    {
+        if (orderQuantity <= 0)
+        {
+            return null;
+        }
+
+        var pkg = packageQuantity > 0 ? packageQuantity : 0;
+        var remaining = orderQuantity - (printedBoxCount * pkg);
+        return remaining < 0 ? 0 : remaining;
+    }
+
+    /// <summary>
+    /// Yeni koli üstü: basilacak &gt; 0, paket katı, ≤ kalan kota (MENGE − basılan×paket).
+    /// Yeni koli içi (Doqu): basilacak ≥ 1; MENGE tavanı / paket katı yok — kota SAP'de.
     /// </summary>
     public static string? ValidateNewPrint(
         LabelType labelType,
         decimal printQuantity,
         decimal packageQuantity,
         decimal orderQuantity,
-        decimal originalPackageQuantity)
+        decimal originalPackageQuantity,
+        int printedBoxCount = 0)
     {
         var packageError = ValidatePackageQuantity(packageQuantity, originalPackageQuantity);
         if (packageError is not null)
@@ -52,7 +74,6 @@ public static class PackageQuantityValidator
         }
 
         // Koli üstü: paket > MENGE olamaz (kat/etiket hesabı bozulur).
-        // Koli içi: formda SAP paketi büyük kalsa bile SAP'ye min(paket, basılacak) gider.
         if (labelType == LabelType.KoliUstu
             && orderQuantity > 0
             && packageQuantity > orderQuantity)
@@ -67,14 +88,27 @@ public static class PackageQuantityValidator
                 return BoxTopEmptyError;
             }
 
-            if (orderQuantity > 0 && printQuantity > orderQuantity)
-            {
-                return $"Basılacak miktar sipariş miktarını ({orderQuantity:0.####}) aşamaz.";
-            }
-
             if (printQuantity % packageQuantity != 0)
             {
                 return NotMultipleError;
+            }
+
+            var remaining = RemainingBoxTopQuantity(orderQuantity, packageQuantity, printedBoxCount);
+            if (remaining is 0)
+            {
+                return BoxTopQuotaExhaustedError
+                    + $" (sipariş={orderQuantity:0.####}, basılan koli={printedBoxCount}, paket={packageQuantity:0.####}).";
+            }
+
+            if (remaining is > 0 && printQuantity > remaining.Value)
+            {
+                return $"Koli üstü en fazla {remaining.Value:0.####} basılabilir (kalan kota)."
+                    + $" Sipariş {orderQuantity:0.####}, basılan koli {printedBoxCount}.";
+            }
+
+            if (orderQuantity > 0 && printQuantity > orderQuantity)
+            {
+                return $"Basılacak miktar sipariş miktarını ({orderQuantity:0.####}) aşamaz.";
             }
 
             return null;
@@ -85,11 +119,6 @@ public static class PackageQuantityValidator
             if (printQuantity < 1)
             {
                 return printQuantity <= 0 ? BoxInsideZeroError : BoxInsideEmptyError;
-            }
-
-            if (orderQuantity > 0 && printQuantity > orderQuantity)
-            {
-                return $"Koli içi adet sipariş miktarını ({orderQuantity:0.####}) aşamaz.";
             }
 
             return null;
@@ -110,9 +139,7 @@ public static class PackageQuantityValidator
     }
 
     /// <summary>
-    /// SAP koli içi kotası tahmini: MENGE − (basılan koli × paket) − basılan koli içi.
-    /// Paket &gt; MENGE ise 0 (önce paket düşürülmeli; aksi halde SAP Max:0).
-    /// MENGE bilinmiyorsa null (kısıtlama yok).
+    /// Yerel koli içi kota hesabı yok (Doqu: MENGE tavanı yok; kota SAP'de).
     /// </summary>
     public static decimal? RemainingInsideQuantity(
         decimal orderQuantity,
@@ -120,19 +147,11 @@ public static class PackageQuantityValidator
         int printedBoxCount,
         int printedInsideBoxCount)
     {
-        if (orderQuantity <= 0)
-        {
-            return null;
-        }
-
-        if (packageQuantity > orderQuantity)
-        {
-            return 0;
-        }
-
-        var pkg = packageQuantity > 0 ? packageQuantity : 0;
-        var remaining = orderQuantity - (printedBoxCount * pkg) - printedInsideBoxCount;
-        return remaining < 0 ? 0 : remaining;
+        _ = orderQuantity;
+        _ = packageQuantity;
+        _ = printedBoxCount;
+        _ = printedInsideBoxCount;
+        return null;
     }
 
     public static bool IsValidMultiple(decimal printQuantity, decimal packageQuantity, LabelType labelType)

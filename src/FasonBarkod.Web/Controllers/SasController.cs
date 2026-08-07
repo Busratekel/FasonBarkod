@@ -192,15 +192,41 @@ public class SasController(
 
         if (!string.IsNullOrWhiteSpace(resolvedVendor))
         {
-            // SAP boş EBELN+cari desteklemiyor; cari listesi yerel basım geçmişinden.
-            // API kapalı olsa bile sayfa çökmez.
-            model.Orders = await LoadVendorOrderSummariesAsync(resolvedVendor, cancellationToken);
+            // SAP: açık SAS listesi + I_KUNNR batch filtresi.
+            // Yerel basım geçmişi yedek (API/SAP kapalı veya kapalı siparişler).
+            var localOrders = await LoadVendorOrderSummariesAsync(resolvedVendor, cancellationToken);
+            List<SasOrderSummaryViewModel> sapOrders = [];
+
+            try
+            {
+                var sapResponse = await apiClient.ListSasAsync(string.Empty, resolvedVendor, cancellationToken);
+                if (sapResponse.Lines.Count > 0)
+                {
+                    sapOrders = GroupLinesToOrderSummaries(sapResponse.Lines, resolvedVendor);
+                }
+                else if (!string.IsNullOrWhiteSpace(sapResponse.Error) && localOrders.Count == 0)
+                {
+                    ModelState.AddModelError(string.Empty, sapResponse.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Cari SAS listesi SAP'den alınamadı: {Vendor}", resolvedVendor);
+                if (localOrders.Count == 0)
+                {
+                    ModelState.AddModelError(
+                        string.Empty,
+                        "SAP listesi alınamadı. Daha önce basılmış kayıtlar da yok.");
+                }
+            }
+
+            model.Orders = MergeOrderSummaries(sapOrders, localOrders, resolvedVendor);
 
             if (model.Orders.Count == 0)
             {
                 model.ListMessage = model.VendorCodeLocked
-                    ? "Size ait kayıtlı SAS bulunamadı."
-                    : "Bu satıcı için kayıtlı SAS bulunamadı.";
+                    ? "Size ait açık / kayıtlı SAS bulunamadı."
+                    : "Bu satıcı için açık / kayıtlı SAS bulunamadı.";
                 ApplyOrderPaging(model);
                 return model;
             }
@@ -437,7 +463,8 @@ public class SasController(
     public async Task<IActionResult> PrintKoliIci(SasDetailViewModel model, CancellationToken cancellationToken)
     {
         model.ActiveTab = "print";
-        return await PrintAsync(model, LabelType.KoliIci, model.KoliIciQuantity, cancellationToken);
+        // Halil/ABAP: yeni Print DURUM='' satır sayar → Max:0. Masaüstü gibi Serials+Reprint.
+        return await PrintKoliIciFromSerialsAsync(model, model.KoliIciQuantity, cancellationToken);
     }
 
     [HttpPost]
@@ -509,35 +536,12 @@ public class SasController(
             printQuantity,
             model.PackageQuantity,
             currentLine.Quantity,
-            originalPackage);
+            originalPackage,
+            currentLine.PrintedBoxCount);
         if (!string.IsNullOrWhiteSpace(validationError))
         {
             ModelState.AddModelError(string.Empty, validationError);
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
-        }
-
-        if (labelType == LabelType.KoliIci)
-        {
-            var remaining = PackageQuantityValidator.RemainingInsideQuantity(
-                currentLine.Quantity,
-                model.PackageQuantity,
-                currentLine.PrintedBoxCount,
-                currentLine.PrintedInsideBoxCount);
-            if (remaining is 0)
-            {
-                ModelState.AddModelError(
-                    string.Empty,
-                    "Koli içi basılamaz (kalan kota: 0).");
-                return await RenderDetailWithErrorsAsync(model, cancellationToken);
-            }
-
-            if (remaining is > 0 && printQuantity > remaining.Value)
-            {
-                ModelState.AddModelError(
-                    string.Empty,
-                    $"Koli içi en fazla {remaining.Value:0.####} basılabilir (kalan kota).");
-                return await RenderDetailWithErrorsAsync(model, cancellationToken);
-            }
         }
 
         // Ekrandaki paket (Admin düzenlediyse o değer) olduğu gibi SAP'ye gider.
@@ -545,6 +549,25 @@ public class SasController(
         if (packageForSap <= 0)
         {
             packageForSap = printQuantity > 0 ? printQuantity : 1;
+        }
+
+        // Koli üstü öncesi mevcut koli içi SERNR'ler (sonra diff ile yenileri Reprint).
+        HashSet<string> beforeInsideSerials = new(StringComparer.OrdinalIgnoreCase);
+        if (labelType == LabelType.KoliUstu)
+        {
+            var beforeInside = await apiClient.ListSasSerialsAsync(
+                model.PurchaseOrderNo,
+                model.LineNo,
+                boxInside: true,
+                cancellationToken);
+            foreach (var s in beforeInside.Serials)
+            {
+                var sn = s.SerialNumber?.Trim();
+                if (!string.IsNullOrWhiteSpace(sn))
+                {
+                    beforeInsideSerials.Add(sn);
+                }
+            }
         }
 
         var result = await apiClient.CreateSasBarcodeAsync(new CreateSasBarcodeRequest(
@@ -575,6 +598,13 @@ public class SasController(
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
+        var allQzJobs = new List<string>();
+        var allSavedIds = new List<int>();
+        if (printResult.UseQzTray && printResult.RawJobs is { Count: > 0 })
+        {
+            allQzJobs.AddRange(printResult.RawJobs);
+        }
+
         var savedIds = await SaveBarcodePrintsAsync(
             model,
             result,
@@ -583,20 +613,331 @@ public class SasController(
             isReprint: false,
             status: printResult.UseQzTray ? BarcodePrintStatus.Pending : BarcodePrintStatus.Printed,
             cancellationToken);
+        allSavedIds.AddRange(savedIds);
 
-        if (printResult.UseQzTray && printResult.RawJobs is { Count: > 0 })
+        var successParts = new List<string>();
+        if (usedMock)
         {
-            FasonBarkod.Web.Filters.QzTrayViewBagFilter.QueueJobs(this, printResult.RawJobs, savedIds);
-            TempData["Success"] = usedMock
-                ? $"{printResult.PrintedCount} MOCK etiket gönderiliyor (SAP başarısız: {result.ErrorMessage}). Gerçek barkod değil!"
-                : $"{printResult.PrintedCount} etiket QZ Tray'e gönderiliyor… Fiziksel basım onaylanınca durum güncellenir.";
+            successParts.Add(
+                $"{printResult.PrintedCount} MOCK {LabelName(labelType)} (SAP: {result.ErrorMessage}).");
+        }
+        else
+        {
+            successParts.Add($"{printResult.PrintedCount} {LabelName(labelType)} etiketi.");
+        }
+
+        // Halil/Doqu: koli üstü Print SAP'de koli içi serilerini de ZMMIST14000'e yazar.
+        // Yeni koli içi Print atma; Serials(KoliIci='X') + Reprint ile bas.
+        if (labelType == LabelType.KoliUstu && !usedMock)
+        {
+            var (insidePrinted, insideNote) = await PrintNewInsideSerialsFromTableAsync(
+                model,
+                packageForSap,
+                beforeInsideSerials,
+                allQzJobs,
+                allSavedIds,
+                cancellationToken);
+            if (insidePrinted > 0)
+            {
+                successParts.Add($"{insidePrinted} koli içi (tablodan Reprint).");
+            }
+            else if (!string.IsNullOrWhiteSpace(insideNote))
+            {
+                successParts.Add(insideNote);
+            }
+        }
+
+        if (allQzJobs.Count > 0)
+        {
+            FasonBarkod.Web.Filters.QzTrayViewBagFilter.QueueJobs(this, allQzJobs, allSavedIds);
+            TempData["Success"] = string.Join(" ", successParts)
+                + " QZ Tray'e gönderiliyor…";
         }
         else if (!string.IsNullOrWhiteSpace(printResult.ErrorMessage))
         {
             TempData["Success"] = printResult.ErrorMessage;
         }
+        else
+        {
+            TempData["Success"] = string.Join(" ", successParts);
+        }
 
         return RedirectToDetail(model, "print");
+    }
+
+    private static string LabelName(LabelType labelType) =>
+        labelType == LabelType.KoliUstu ? "koli üstü" : "koli içi";
+
+    /// <summary>
+    /// Koli içi: GetSAPSASBarcodePrint (yeni) değil — ZMMIST14000 Serials + Reprint.
+    /// ABAP yeni Print'te DURUM='' AND KOLIB='X' sayar; yoksa Max:0. Masaüstü Reprint kullanır.
+    /// </summary>
+    private async Task<IActionResult> PrintKoliIciFromSerialsAsync(
+        SasDetailViewModel model,
+        decimal printQuantity,
+        CancellationToken cancellationToken)
+    {
+        model.VendorCode = await ResolveVendorCodeAsync(model.VendorCode);
+
+        if (!User.IsInRole("Admin") && string.IsNullOrWhiteSpace(model.VendorCode))
+        {
+            ModelState.AddModelError(string.Empty, "Hesabınıza satıcı kodu tanımlı değil. Yönetici ile iletişime geçin.");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(model.LineNo))
+        {
+            ModelState.AddModelError(string.Empty, "Önce tablodan bir kalem seçin.");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        if (printQuantity < 1)
+        {
+            ModelState.AddModelError(string.Empty, PackageQuantityValidator.BoxInsideZeroError);
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        var currentLines = await apiClient.ListSasAsync(model.PurchaseOrderNo, model.VendorCode, cancellationToken);
+        var currentLine = currentLines.Lines.FirstOrDefault(l =>
+            string.Equals(l.LineNo, model.LineNo, StringComparison.OrdinalIgnoreCase)
+            || (int.TryParse(l.LineNo, out var a) && int.TryParse(model.LineNo, out var b) && a == b));
+        if (currentLine is null)
+        {
+            ModelState.AddModelError(string.Empty, "Seçili kalem SAP listesinde bulunamadı. Sayfayı yenileyip tekrar deneyin.");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        var originalPackage = currentLine.PackageQuantity > 0
+            ? currentLine.PackageQuantity
+            : model.OriginalPackageQuantity;
+        model.OriginalPackageQuantity = originalPackage;
+        model.OrderQuantity = currentLine.Quantity;
+
+        if (!User.IsInRole("Admin"))
+        {
+            model.PackageQuantity = originalPackage > 0 ? originalPackage : currentLine.PackageQuantity;
+        }
+
+        if (model.PackageQuantity <= 0)
+        {
+            ModelState.AddModelError(string.Empty, PackageQuantityValidator.PackageRequiredError);
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        var packageForSap = model.PackageQuantity;
+        var want = (int)Math.Floor(printQuantity);
+        if (want < 1)
+        {
+            want = 1;
+        }
+
+        var serialsResult = await apiClient.ListSasSerialsAsync(
+            model.PurchaseOrderNo,
+            model.LineNo,
+            boxInside: true,
+            cancellationToken);
+
+        if (!serialsResult.Success && serialsResult.Serials.Count == 0)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                serialsResult.ErrorMessage
+                ?? "Koli içi serileri okunamadı (GetSAPSASBarcodeSerials KoliIci='X').");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        // Önce DURUM boş (ABAP Max sayacı ile aynı), yetmezse diğer seriler (masaüstü Reprint gibi).
+        var ordered = serialsResult.Serials
+            .Where(s => !string.IsNullOrWhiteSpace(s.SerialNumber))
+            .OrderBy(s => string.IsNullOrWhiteSpace(s.Status) ? 0 : 1)
+            .ThenBy(s => s.SerialNumber, StringComparer.OrdinalIgnoreCase)
+            .Select(s => s.SerialNumber.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(want)
+            .ToList();
+
+        if (ordered.Count == 0)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                "ZMMIST14000’de koli içi SERNR yok. Önce koli üstü basın (SAP tabloya iç yazar) "
+                + "veya Yeniden Etiket Yazdır’dan seçin. "
+                + "Yeni koli içi Print Max:0 verir (DURUM boş satır yok).");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        var allQzJobs = new List<string>();
+        var allSavedIds = new List<int>();
+        var printed = 0;
+        var errors = new List<string>();
+
+        foreach (var sernr in ordered)
+        {
+            var reprint = await apiClient.ReprintSasBarcodeAsync(new ReprintSasBarcodeRequest(
+                model.PurchaseOrderNo,
+                model.LineNo,
+                packageForSap,
+                LabelType.KoliIci,
+                sernr,
+                User.Identity?.Name,
+                model.VendorCode), cancellationToken);
+
+            if (!reprint.Success && !IsAllowedMockBarcodeResult(reprint))
+            {
+                errors.Add($"{sernr}: {reprint.ErrorMessage ?? "Reprint başarısız"}");
+                continue;
+            }
+
+            var insidePrint = await labelPrintService.PrintSasLabelsAsync(
+                await BuildPrintContextAsync(
+                    model, LabelType.KoliIci, reprint, sernr, cancellationToken),
+                cancellationToken);
+
+            if (!insidePrint.Success)
+            {
+                errors.Add($"{sernr}: {insidePrint.ErrorMessage ?? "yazdırma hatası"}");
+                continue;
+            }
+
+            if (insidePrint.UseQzTray && insidePrint.RawJobs is { Count: > 0 })
+            {
+                allQzJobs.AddRange(insidePrint.RawJobs);
+            }
+
+            var saved = await SaveBarcodePrintsAsync(
+                model,
+                reprint,
+                packageForSap,
+                LabelType.KoliIci,
+                isReprint: true,
+                status: insidePrint.UseQzTray ? BarcodePrintStatus.Pending : BarcodePrintStatus.Printed,
+                cancellationToken);
+            allSavedIds.AddRange(saved);
+            printed += insidePrint.PrintedCount > 0 ? insidePrint.PrintedCount : 1;
+        }
+
+        if (printed == 0)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                errors.Count > 0
+                    ? "Koli içi basılamadı: " + string.Join("; ", errors.Take(3))
+                    : "Koli içi basılamadı.");
+            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+        }
+
+        var msg = $"{printed} koli içi etiketi (tablodan Reprint)."
+            + (ordered.Count < want ? $" İstenen {want}, tabloda {ordered.Count} SERNR vardı." : "")
+            + (errors.Count > 0 ? " Bazı hatalar: " + string.Join("; ", errors.Take(2)) : "");
+
+        if (allQzJobs.Count > 0)
+        {
+            FasonBarkod.Web.Filters.QzTrayViewBagFilter.QueueJobs(this, allQzJobs, allSavedIds);
+            TempData["Success"] = msg + " QZ Tray'e gönderiliyor…";
+        }
+        else
+        {
+            TempData["Success"] = msg;
+        }
+
+        return RedirectToDetail(model, "print");
+    }
+
+    /// <summary>
+    /// Koli üstü sonrası: Serials(KoliIci='X') ile yeni serileri bul, Reprint ile bas.
+    /// Yeni Print (GetSAPSASBarcodePrint koli içi) kullanılmaz.
+    /// </summary>
+    private async Task<(int PrintedCount, string? Note)> PrintNewInsideSerialsFromTableAsync(
+        SasDetailViewModel model,
+        decimal packageForSap,
+        HashSet<string> beforeSerials,
+        List<string> allQzJobs,
+        List<int> allSavedIds,
+        CancellationToken cancellationToken)
+    {
+        var after = await apiClient.ListSasSerialsAsync(
+            model.PurchaseOrderNo,
+            model.LineNo,
+            boxInside: true,
+            cancellationToken);
+
+        if (!after.Success && after.Serials.Count == 0)
+        {
+            return (0, "Koli içi serileri okunamadı: " + (after.ErrorMessage ?? "Serials hatası"));
+        }
+
+        var newSerials = after.Serials
+            .Select(s => s.SerialNumber?.Trim() ?? "")
+            .Where(s => s.Length > 0 && !beforeSerials.Contains(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (newSerials.Count == 0)
+        {
+            return (0,
+                "Koli içi için tabloda yeni SERNR yok (Serials KoliIci='X'). "
+                + "Yeniden Etiket Yazdır sekmesinden mevcut iç serileri basabilirsiniz.");
+        }
+
+        var printed = 0;
+        var errors = new List<string>();
+
+        foreach (var sernr in newSerials)
+        {
+            var reprint = await apiClient.ReprintSasBarcodeAsync(new ReprintSasBarcodeRequest(
+                model.PurchaseOrderNo,
+                model.LineNo,
+                packageForSap,
+                LabelType.KoliIci,
+                sernr,
+                User.Identity?.Name,
+                model.VendorCode), cancellationToken);
+
+            if (!reprint.Success && !IsAllowedMockBarcodeResult(reprint))
+            {
+                errors.Add($"{sernr}: {reprint.ErrorMessage ?? "Reprint başarısız"}");
+                continue;
+            }
+
+            var insidePrint = await labelPrintService.PrintSasLabelsAsync(
+                await BuildPrintContextAsync(
+                    model, LabelType.KoliIci, reprint, sernr, cancellationToken),
+                cancellationToken);
+
+            if (!insidePrint.Success)
+            {
+                errors.Add($"{sernr}: {insidePrint.ErrorMessage ?? "yazdırma hatası"}");
+                continue;
+            }
+
+            if (insidePrint.UseQzTray && insidePrint.RawJobs is { Count: > 0 })
+            {
+                allQzJobs.AddRange(insidePrint.RawJobs);
+            }
+
+            var saved = await SaveBarcodePrintsAsync(
+                model,
+                reprint,
+                packageForSap > 0 ? packageForSap : 1,
+                LabelType.KoliIci,
+                isReprint: true,
+                status: insidePrint.UseQzTray ? BarcodePrintStatus.Pending : BarcodePrintStatus.Printed,
+                cancellationToken);
+            allSavedIds.AddRange(saved);
+            printed += insidePrint.PrintedCount > 0 ? insidePrint.PrintedCount : 1;
+        }
+
+        if (printed == 0 && errors.Count > 0)
+        {
+            return (0, "Koli içi Reprint: " + string.Join("; ", errors.Take(3)));
+        }
+
+        if (errors.Count > 0)
+        {
+            return (printed, $"Koli içi kısmen: {printed} OK; hata: {string.Join("; ", errors.Take(2))}");
+        }
+
+        return (printed, null);
     }
 
     private async Task<IActionResult> ReprintAsync(
@@ -618,11 +959,25 @@ public class SasController(
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
-        if (string.IsNullOrWhiteSpace(model.SerialNumber))
+        var serials = (model.SerialNumbers ?? [])
+            .Select(s => s?.Trim())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToList();
+
+        if (serials.Count == 0 && !string.IsNullOrWhiteSpace(model.SerialNumber))
         {
-            ModelState.AddModelError(string.Empty, "Tekrar basım için listeden bir SERNR seçin.");
+            serials.Add(model.SerialNumber.Trim());
+        }
+
+        if (serials.Count == 0)
+        {
+            ModelState.AddModelError(string.Empty, "Tekrar basım için listeden en az bir SERNR seçin.");
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
+
+        model.SerialNumber = serials[0];
 
         // Bu kalemde basılmış etiket yoksa yeniden basıma izin verme.
         var hasPrinted = await context.BarcodePrints.AsNoTracking().AnyAsync(
@@ -682,45 +1037,77 @@ public class SasController(
         }
 
         var packageForSap = labelType == LabelType.KoliUstu ? 0 : model.PackageQuantity;
+        var allQzJobs = new List<string>();
+        var allSavedIds = new List<int>();
+        var printed = 0;
+        var errors = new List<string>();
 
-        var result = await apiClient.ReprintSasBarcodeAsync(new ReprintSasBarcodeRequest(
-            model.PurchaseOrderNo,
-            model.LineNo,
-            packageForSap,
-            labelType,
-            model.SerialNumber.Trim(),
-            User.Identity?.Name,
-            model.VendorCode), cancellationToken);
-
-        if (!result.Success && !IsAllowedMockBarcodeResult(result))
+        foreach (var sernr in serials)
         {
-            ModelState.AddModelError(string.Empty, result.ErrorMessage ?? "SAP tekrar basım başarısız.");
+            var result = await apiClient.ReprintSasBarcodeAsync(new ReprintSasBarcodeRequest(
+                model.PurchaseOrderNo,
+                model.LineNo,
+                packageForSap,
+                labelType,
+                sernr,
+                User.Identity?.Name,
+                model.VendorCode), cancellationToken);
+
+            if (!result.Success && !IsAllowedMockBarcodeResult(result))
+            {
+                errors.Add($"{sernr}: {result.ErrorMessage ?? "SAP tekrar basım başarısız"}");
+                continue;
+            }
+
+            var printResult = await labelPrintService.PrintSasLabelsAsync(
+                await BuildPrintContextAsync(model, labelType, result, sernr, cancellationToken),
+                cancellationToken);
+
+            if (!printResult.Success)
+            {
+                errors.Add($"{sernr}: {printResult.ErrorMessage ?? "Yazdırma başarısız"}");
+                continue;
+            }
+
+            if (printResult.UseQzTray && printResult.RawJobs is { Count: > 0 })
+            {
+                allQzJobs.AddRange(printResult.RawJobs);
+            }
+
+            var savedIds = await SaveBarcodePrintsAsync(
+                model,
+                result,
+                model.PackageQuantity,
+                labelType,
+                isReprint: true,
+                status: printResult.UseQzTray ? BarcodePrintStatus.Pending : BarcodePrintStatus.Printed,
+                cancellationToken);
+            allSavedIds.AddRange(savedIds);
+            printed += printResult.PrintedCount > 0 ? printResult.PrintedCount : 1;
+        }
+
+        if (printed == 0)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                errors.Count > 0
+                    ? "Tekrar basım başarısız: " + string.Join("; ", errors.Take(3))
+                    : "Tekrar basım başarısız.");
             return await RenderDetailWithErrorsAsync(model, cancellationToken);
         }
 
-        var printResult = await labelPrintService.PrintSasLabelsAsync(
-            await BuildPrintContextAsync(model, labelType, result, model.SerialNumber.Trim(), cancellationToken),
-            cancellationToken);
+        var labelName = labelType == LabelType.KoliUstu ? "koli üstü" : "koli içi";
+        var msg = $"{printed} {labelName} etiketi (tekrar, {serials.Count} SERNR)."
+            + (errors.Count > 0 ? " Bazı hatalar: " + string.Join("; ", errors.Take(2)) : "");
 
-        if (!printResult.Success)
+        if (allQzJobs.Count > 0)
         {
-            ModelState.AddModelError(string.Empty, printResult.ErrorMessage ?? "Yazdırma başarısız.");
-            return await RenderDetailWithErrorsAsync(model, cancellationToken);
+            FasonBarkod.Web.Filters.QzTrayViewBagFilter.QueueJobs(this, allQzJobs, allSavedIds);
+            TempData["Success"] = msg + " QZ Tray'e gönderiliyor… Fiziksel basım onaylanınca durum güncellenir.";
         }
-
-        var savedIds = await SaveBarcodePrintsAsync(
-            model,
-            result,
-            model.PackageQuantity,
-            labelType,
-            isReprint: true,
-            status: printResult.UseQzTray ? BarcodePrintStatus.Pending : BarcodePrintStatus.Printed,
-            cancellationToken);
-
-        if (printResult.UseQzTray && printResult.RawJobs is { Count: > 0 })
+        else
         {
-            FasonBarkod.Web.Filters.QzTrayViewBagFilter.QueueJobs(this, printResult.RawJobs, savedIds);
-            TempData["Success"] = $"{printResult.PrintedCount} etiket (tekrar) QZ Tray'e gönderiliyor… Fiziksel basım onaylanınca durum güncellenir.";
+            TempData["Success"] = msg;
         }
 
         return RedirectToDetail(model, "reprint");
@@ -1064,8 +1451,7 @@ public class SasController(
                 || labelType == LabelType.KoliIci))
         {
             return "SAP koli içi basıma izin vermedi (Max: 0). "
-                + "Paket miktarı sipariş miktarından büyükse önce paketi düşürün; "
-                + "veya bu kalemde koli içi tanımlı olmayabilir. "
+                + "SAP tarafındaki kota/tanım bu basımı reddetti. "
                 + $"({sapMessage})";
         }
 

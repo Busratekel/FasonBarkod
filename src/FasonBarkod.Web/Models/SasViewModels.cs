@@ -84,6 +84,9 @@ public class SasDetailViewModel
     [Display(Name = "Seri No (SERNR)")]
     public string SerialNumber { get; set; } = string.Empty;
 
+    /// <summary>Yeniden basımda toplu seçilen SERNR'ler.</summary>
+    public List<string> SerialNumbers { get; set; } = [];
+
     /// <summary>SAP ZMMIST14000 — koli üstü serileri.</summary>
     public List<SasSerialDto> SapSerialsBoxTop { get; set; } = [];
 

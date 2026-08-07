@@ -342,15 +342,8 @@ public static class ZmmSasBImportMapper
     {
         var isBoxTop = request.LabelType == LabelType.KoliUstu;
         var printQty = (int)request.PrintQuantity;
-        // Koli üstü: etiket üzerindeki "KOLİ X ADET" için paket kritik.
-        // Koli içi: operatör "N adet ürün etiketi" ister; SAP'ye giden I_PAKET_ICI
-        // formdaki büyük paket (örn. 5) ile basım adedi (1) çakışınca Max:0 olur.
-        // Bu yüzden koli içide paket = min(form paketi, basılacak adet).
-        var packageQty = isBoxTop
-            ? (int)request.PackageQuantity
-            : (int)Math.Min(
-                request.PackageQuantity > 0 ? request.PackageQuantity : printQty,
-                printQty > 0 ? printQty : request.PackageQuantity);
+        // Ekrandaki / istekteki paket olduğu gibi SAP'ye gider (koli içi dahil).
+        var packageQty = (int)request.PackageQuantity;
         if (packageQty <= 0)
         {
             packageQty = Math.Max(printQty, 1);
@@ -361,7 +354,7 @@ public static class ZmmSasBImportMapper
         // Koli içi: basım miktarı (örn. 5 → 5 etiket).
         var barcodesToPrint = PackageQuantityValidator.CalculateLabelCount(
             request.PrintQuantity,
-            isBoxTop ? request.PackageQuantity : packageQty,
+            packageQty,
             request.LabelType);
 
         return new ZmmSasBInvoke

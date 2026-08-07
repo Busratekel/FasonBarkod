@@ -112,7 +112,8 @@ public class SasController(ISapService sapService) : ControllerBase
             request.PrintQuantity,
             request.PackageQuantity,
             orderQty,
-            originalPackage);
+            originalPackage,
+            line?.PrintedBoxCount ?? 0);
         if (!string.IsNullOrWhiteSpace(validationError))
         {
             return BadRequest(new { error = validationError });
